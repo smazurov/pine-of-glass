@@ -211,12 +211,41 @@ function columnBoundary(
   return { plainIndex: text.length, column };
 }
 
+/** Where a middle truncation's retained tail starts in the stripped line, and its width. */
+type TailCut = { plainIndex: number; width: number };
+
+/** The tail cut by the forward scan: exact for every input, but O(line). */
+function forwardTailCut(text: string, maxTail: number): TailCut {
+  const visLen = visibleWidth(text);
+  const boundary = columnBoundary(text, visLen - maxTail, "up");
+  return { plainIndex: boundary.plainIndex, width: visLen - boundary.column };
+}
+
+/** The tail cut, found from the end: the longest grapheme-aligned tail whose width stays
+ * within `maxTail`. Equal to `columnBoundary(text, visibleWidth(text) - maxTail, "up")`
+ * whenever per-grapheme widths sum to `visibleWidth(text)`, and costs O(tail) instead of
+ * O(line): `Segments.containing()` resolves each boundary locally, so a 26k-character
+ * tool line no longer pays a full grapheme walk to keep its last few dozen columns. */
+function tailBoundary(text: string, maxTail: number): TailCut {
+  const segments = graphemeSegmenter.segment(text);
+  let plainIndex = text.length;
+  let width = 0;
+  while (plainIndex > 0) {
+    const grapheme = segments.containing(plainIndex - 1);
+    if (!grapheme) break;
+    const next = width + visibleWidth(grapheme.segment);
+    if (next > maxTail) break;
+    width = next;
+    plainIndex = grapheme.index;
+  }
+  return { plainIndex, width };
+}
+
 export function middleTruncate(line: string, width: number, theme?: Theme): string {
   const maxWidth = Math.max(1, width);
   if (visibleWidth(line) <= maxWidth) return line;
 
   const vis = stripAnsi(line);
-  const visLen = visibleWidth(vis);
   const ellipsisWidth = visibleWidth(ELLIPSIS);
   const budget = Math.max(1, maxWidth - ellipsisWidth); // reserve columns for the ellipsis
 
@@ -227,12 +256,14 @@ export function middleTruncate(line: string, width: number, theme?: Theme): stri
   // the head exactly fills the rest, so every line truncated to the same budget cuts at
   // identical columns and fills the budget exactly. Wide graphemes that cross either cut
   // round out of the retained spans; padding keeps the ellipsis and right edge fixed.
-  const tailStart = visLen - maxTail;
-  const tailBoundary = columnBoundary(vis, tailStart, "up");
+  // The backward walk sums per-grapheme widths, which equal visibleWidth(vis) unless an
+  // escape survived stripAnsi (visibleWidth strips more kinds) or a tab is present (it
+  // expands to three spaces before segmenting). Those rare lines keep the forward scan.
+  const tail = vis.includes("\x1b") || vis.includes("\t") ? forwardTailCut(vis, maxTail) : tailBoundary(vis, maxTail);
   const dimEllipsis = ink(theme, "dim", ELLIPSIS);
-  const tailRawStart = rawIndexAtVisibleIndex(line, tailBoundary.plainIndex);
+  const tailRawStart = rawIndexAtVisibleIndex(line, tail.plainIndex);
   const tailRaw = `${activeSgrAt(line, tailRawStart)}${line.slice(tailRawStart)}`;
-  const tailPadding = Math.max(0, maxTail - (visLen - tailBoundary.column));
+  const tailPadding = Math.max(0, maxTail - tail.width);
 
   const headEnd = budget - maxTail;
   if (headEnd <= 0) return `${dimEllipsis}${" ".repeat(tailPadding)}${tailRaw}`;
