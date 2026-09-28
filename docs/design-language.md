@@ -158,6 +158,9 @@ Rules:
 - methodology appears once per panel: a dim line under the panel header, never on
   data rows. Data rows carry at most a raw size in parens: `(9.2k ch)`
 - blank lines: one before a group, none within it
+- narrow terminals squeeze padding before they break a column: a label column gives
+  up its spare width down to the widest label, and a row that still overflows hangs
+  its dim detail under the quantity column rather than wrapping to column 0
 - tildify home paths; middle-truncate long lines, protecting the tail
 - ink survives the cut: `middleTruncate` replays the active SGR state after the
   ellipsis, so a cut inside a styled span never leaves the tail in default ink

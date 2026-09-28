@@ -61,6 +61,12 @@ test("summary view goldens at 80 and 120 columns", () => {
   expectGolden("contextimate-summary-codex-100.txt", rendered(renderSummary(fixtureSnapshot(codexModel), plainTheme, 100)));
 });
 
+test("summary view keeps its token column at narrow widths", () => {
+  const snapshot = fixtureSnapshot(codexModel);
+  expectGolden("contextimate-summary-codex-64.txt", rendered(renderSummary(snapshot, plainTheme, 64)));
+  expectGolden("contextimate-summary-codex-48.txt", rendered(renderSummary(snapshot, plainTheme, 48)));
+});
+
 test("compact view goldens at 80 and 120 columns", () => {
   const snapshot = fixtureSnapshot(anthropicModel);
   expectGolden("contextimate-compact-anthropic-80.txt", rendered(renderCompact(snapshot, plainTheme, 80)));
