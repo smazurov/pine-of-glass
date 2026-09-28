@@ -30,6 +30,8 @@ const session = {
   messageChars: 1300,
   messageCount: 6,
   contextUsageEstimated: false,
+  measuredToolOutputTokens: 0,
+  measuredToolOutputChars: 0,
 };
 
 test("with Pi usage: total anchors to (Pi current − estimated harness) and residual is clamped", () => {

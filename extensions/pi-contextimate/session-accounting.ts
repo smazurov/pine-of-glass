@@ -19,6 +19,13 @@ export type SessionBreakdown = {
   messageCount: number;
   /** Pi's current total includes a local estimate after the last trusted assistant usage. */
   contextUsageEstimated: boolean;
+  /** Provider-measured prompt growth attributed to tool results, in the anchor model's tokens. */
+  measuredToolOutputTokens: number;
+  /** Characters of the tool results that `measuredToolOutputTokens` covers. */
+  measuredToolOutputChars: number;
+  /** The first request's exact prompt, present only while the cache proves every later
+   * request up to the anchor reused it unchanged. */
+  firstPrompt?: { tokens: number; preludeChars: number };
 };
 
 export type SessionScan = {
@@ -30,6 +37,8 @@ export type SessionScan = {
 export type SessionEstimate = {
   totalTokens: number;
   totalSource: "pi" | "heuristic";
+  harnessTokens: number;
+  harnessSource: "measured" | "estimate";
   toolOutputTokens: number;
   messageTokens: number;
   thinkingSummaryTokens: number;
@@ -38,24 +47,33 @@ export type SessionEstimate = {
   denominator: number;
 };
 
+// A first message larger than this makes the harness measurement mostly estimate.
+const MAX_PRELUDE_TOKENS = 4096; // agent-default (not a user rule): 2026-09-28
+
 export function estimateSessionBreakdown(
   session: SessionBreakdown,
   options: { denominator: number; harnessTokens: number; contextTokens?: number | null },
 ): SessionEstimate {
   const estimate = (chars: number) => Math.ceil(chars / options.denominator);
-  const toolOutputTokens = estimate(session.toolOutputChars);
+  const unmeasuredToolChars = Math.max(0, session.toolOutputChars - session.measuredToolOutputChars);
+  const toolOutputTokens = session.measuredToolOutputTokens + estimate(unmeasuredToolChars);
   const messageTokens = estimate(session.messageChars);
   const thinkingSummaryTokens = estimate(session.thinkingSummaryChars);
   const attributedTokens = toolOutputTokens + messageTokens + thinkingSummaryTokens + (session.reasoningTokens ?? 0);
-  const heuristicTotal = estimate(session.toolOutputChars + session.messageChars + session.thinkingSummaryChars)
-    + (session.reasoningTokens ?? 0);
-  const piTotal = options.contextTokens === null || options.contextTokens === undefined
-    ? undefined
-    : Math.max(0, Math.round(options.contextTokens - options.harnessTokens));
-  const totalTokens = piTotal ?? heuristicTotal;
+  const contextTokens = options.contextTokens ?? undefined;
+  const firstPrompt = contextTokens === undefined ? undefined : session.firstPrompt;
+  const preludeTokens = firstPrompt ? estimate(firstPrompt.preludeChars) : 0;
+  const measuredHarness = firstPrompt && preludeTokens <= MAX_PRELUDE_TOKENS
+    ? Math.max(0, firstPrompt.tokens - preludeTokens)
+    : undefined;
+  const harnessTokens = measuredHarness ?? options.harnessTokens;
+  const piTotal = contextTokens === undefined ? undefined : Math.max(0, Math.round(contextTokens - harnessTokens));
+  const totalTokens = piTotal ?? attributedTokens;
   return {
     totalTokens,
     totalSource: piTotal === undefined ? "heuristic" : "pi",
+    harnessTokens,
+    harnessSource: measuredHarness === undefined ? "estimate" : "measured",
     toolOutputTokens,
     messageTokens,
     thinkingSummaryTokens,
@@ -112,6 +130,20 @@ function sameModel(left: AssistantMessage, right: AssistantMessage): boolean {
   return left.provider === right.provider && left.api === right.api && left.model === right.model;
 }
 
+// A prompt cache matches only an unchanged prefix, so a cache read that reaches the
+// previous request's full prompt proves nothing before it changed. Codex caches in
+// blocks and can stop a few hundred tokens short.
+const CACHE_PREFIX_SLACK_TOKENS = 2048; // agent-default (not a user rule): 2026-09-28
+
+function promptTokens(message: AssistantMessage): number {
+  const usage = message.usage;
+  return Math.max(usage.input + usage.cacheRead + usage.cacheWrite, usage.totalTokens - usage.output, 0);
+}
+
+function reusedPrompt(previous: AssistantMessage, next: AssistantMessage): boolean {
+  return promptTokens(previous) - next.usage.cacheRead <= CACHE_PREFIX_SLACK_TOKENS;
+}
+
 function hasEncryptedOpenAIReasoning(signature: string | undefined): boolean {
   if (!signature) return false;
   try {
@@ -147,6 +179,8 @@ export function scanSession(sessionManager?: SessionSource): SessionScan {
       messageChars: 0,
       messageCount: messages.length,
       contextUsageEstimated: true,
+      measuredToolOutputTokens: 0,
+      measuredToolOutputChars: 0,
     };
     const trustedAssistantIndices: number[] = [];
     let lastTrustedUsageIndex = -1;
@@ -204,9 +238,7 @@ export function scanSession(sessionManager?: SessionSource): SessionScan {
           historicalReasoningIndices.add(index);
         }
       }
-      const promptBuckets = anchor.usage.input + anchor.usage.cacheRead + anchor.usage.cacheWrite;
-      const reportedPromptTokens = Math.max(promptBuckets, anchor.usage.totalTokens - anchor.usage.output, 0);
-      if (historicalReasoningTokens > reportedPromptTokens) {
+      if (historicalReasoningTokens > promptTokens(anchor)) {
         exactReasoningTokens -= historicalReasoningTokens;
         for (const index of historicalReasoningIndices) exactReasoningIndices.delete(index);
         hasExactReasoning = exactReasoningIndices.size > 0;
@@ -214,8 +246,47 @@ export function scanSession(sessionManager?: SessionSource): SessionScan {
     }
     if (hasExactReasoning) breakdown.reasoningTokens = exactReasoningTokens;
 
+    // Between two responses that reused one cached prefix, the prompt grew by exactly
+    // what was appended: the earlier response as replayed, plus the tool results.
+    const anchorModel = anchor?.role === "assistant" ? anchor : undefined;
+    for (let k = 1; k < trustedAssistantIndices.length; k++) {
+      const start = trustedAssistantIndices[k - 1]!;
+      const end = trustedAssistantIndices[k]!;
+      const previous = llmMessages[start]!;
+      const next = llmMessages[end]!;
+      if (previous.role !== "assistant" || next.role !== "assistant" || !anchorModel) continue;
+      if (!sameModel(previous, anchorModel) || !reusedPrompt(previous, next)) continue;
+      const appended = llmMessages.slice(start + 1, end);
+      if (appended.length === 0 || appended.some((message) => message.role !== "toolResult")) continue;
+      const reasoning = reportedReasoning(previous) ?? 0;
+      const replayed = previous.usage.output - (hasReasoningCarrier(previous) ? 0 : reasoning);
+      const measured = promptTokens(next) - promptTokens(previous) - replayed;
+      if (measured < 0) continue;
+      breakdown.measuredToolOutputTokens += measured;
+      breakdown.measuredToolOutputChars += appended.reduce((sum, message) => sum + countTextContent(message.content), 0);
+    }
+
+    // The first request is harness plus prelude. It still describes the anchor's harness
+    // only if every later request reused its prompt, and compaction rewrote none of it.
+    const firstIndex = trustedAssistantIndices[0];
+    const first = firstIndex === undefined ? undefined : llmMessages[firstIndex];
+    const firstPromptHolds = first?.role === "assistant" && anchorModel !== undefined
+      && !messages.some((message) => message.role === "compactionSummary")
+      && trustedAssistantIndices.every((index, k) => {
+        const message = llmMessages[index]!;
+        if (message.role !== "assistant" || !sameModel(message, anchorModel)) return false;
+        const previous = k === 0 ? undefined : llmMessages[trustedAssistantIndices[k - 1]!];
+        return previous?.role !== "assistant" || reusedPrompt(previous, message);
+      });
+
     for (let index = 0; index < llmMessages.length; index++) {
       const message = llmMessages[index]!;
+      if (index === firstIndex && firstPromptHolds && first?.role === "assistant") {
+        breakdown.firstPrompt = {
+          tokens: promptTokens(first),
+          preludeChars: breakdown.toolOutputChars + breakdown.messageChars + breakdown.thinkingSummaryChars,
+        };
+      }
       if (message.role === "toolResult") {
         breakdown.toolOutputChars += countTextContent(message.content);
         continue;

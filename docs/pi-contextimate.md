@@ -82,13 +82,37 @@ In the UI, a formula-counted tools row says `OpenAI formula · schema text ÷ 6.
 The session split anchors on that total and claims only what it can count:
 
 ```text
-Tool outputs:        y         estimated from provider-shaped tool output chars
+Tool outputs:        y         measured from prompt growth where proven, otherwise estimated from chars
 Messages:            z         estimated from visible message text and tool-call structure
 Thinking summaries:  s         estimated from summaries not covered by exact retained reasoning
 Reasoning context:   r         exact reported reasoning retained in the anchored request
 Unattributed:        x-y-z-s-r remaining accounting gap
-Total session:       x         Pi's total minus the estimated static prefix
+Total session:       x         Pi's total minus the harness (measured where proven, otherwise estimated)
 ```
+
+### Measured tool outputs
+
+Every trusted response records its exact prompt size: uncached input plus cache reads and writes. Between two consecutive responses, the prompt grows by exactly what was appended: the earlier response as replayed, plus the tool results that followed it. Contextimate subtracts the earlier response's exact output tokens and attributes the rest to those tool results. It excludes reasoning from that subtraction when the response has no replay carrier, because the provider did not send it back.
+
+A step is measured only when all of these hold:
+
+- both responses come from the anchor model, so the count is in the anchor model's tokens
+- only tool results sit between them; a user or custom message makes the step unmeasured
+- the later request's cache read reaches within 2,048 tokens of the earlier prompt, which proves the earlier prompt was reused unchanged; Codex caches in blocks and often stops a few hundred tokens short, while a harness change breaks the cache far earlier
+- the growth is at least the replayed response
+
+Unmeasured tool results keep the chars ÷ session divisor estimate. The row detail says `measured` when every tool result is measured and names the measured share of characters when only some are. The measured figure includes the provider's per-item framing, about 11 tokens per tool result on Codex.
+
+The first real case was a binary file dumped by `head`: 28.1k characters that cost 22.8k tokens, not the 7.0k that chars ÷ 4 claimed. Replaying the last 400 local sessions on 28 September 2026, the Unattributed share of the session fell from a median of 8.3% (90th percentile 20.8%) to 0.0% (1.1%) on 116 Codex sessions, and from 9.9% (29.8%) to 2.4% (4.7%) on 19 Claude sessions. Of within-turn tool steps, 98.9% on Codex and 99.2% on Claude passed the cache check.
+
+### Measured harness
+
+The first request's prompt is the harness plus whatever preceded the first response, usually one user message. Contextimate uses it as `Total harness` when both of these hold:
+
+- every later trusted response up to the anchor comes from the anchor model and passes the same cache check against the one before it, and no compaction summary sits on the active path
+- the preceding messages estimate at 4,096 tokens or fewer, so subtracting them as an estimate cannot swamp the measurement
+
+The section rows stay estimates. The total's detail reads `(measured · rows ~17.2k · ~7% ctx)`, so the gap between the measured total and the sum of the rows stays visible. A cache miss anywhere in the chain, typically after an idle pause, returns the harness to its estimate: the miss is also what a resumed session with a rebuilt system prompt looks like, and the two cannot be told apart. In the replay above, about a third of Codex sessions had such a miss. A harness change made after the anchor, such as a reload or a tool toggle, shows in the rows at once and in the measured total after the next response.
 
 The `thinking` text saved by Pi can be a provider-generated summary, not the model's full internal reasoning. Contextimate never estimates reasoning from that text or from an opaque signature. `Reasoning context` sums exact `usage.reasoning` values retained by the request anchoring Pi's total. The current response's reasoning appears as output. Earlier responses appear as input only when Pi replays their signed carrier under the provider's retention policy.
 
@@ -102,7 +126,7 @@ Other providers' historical reasoning stays unattributed until their retention i
 
 Summaries not covered by exact retained reasoning are estimated separately as `Thinking summaries`. This includes Claude thinking that Pi converts to ordinary text after a model change, and a current block whose session usage has no reasoning breakdown. Opaque carriers and redacted signatures are never converted from bytes or characters into supposed token counts. Missing provider breakdowns remain part of `Unattributed` rather than becoming estimated reasoning.
 
-`Unattributed` is the remaining accounting gap, not a diagnosis. It can absorb static-prefix estimation error, provider overhead, images, opaque replay carriers and reasoning when the provider supplies no breakdown. In particular, a large gap does not claim that the model used that many reasoning tokens.
+`Unattributed` is the remaining accounting gap, not a diagnosis. It can absorb static-prefix estimation error when the harness is not measured, estimation error in messages and unmeasured tool outputs, provider overhead, images, opaque replay carriers and reasoning when the provider supplies no breakdown. In particular, a large gap does not claim that the model used that many reasoning tokens.
 
 After compaction, Pi deliberately reports usage as unknown until the next assistant response arrives. The panel then falls back to its heuristic estimate and labels the whole total as heuristic.
 

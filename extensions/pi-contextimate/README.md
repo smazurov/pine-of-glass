@@ -51,7 +51,9 @@ How to read the numbers:
 - `Reasoning context` sums provider-reported exact counts for signed reasoning retained by the response anchoring Pi's total; it follows Claude and OpenAI's model-specific retention defaults
 - Pi's exact prompt total, including cache reads and writes, rejects historical attribution that cannot fit; summaries not covered by exact counts remain estimated separately as `Thinking summaries`
 - opaque signatures are never treated as token-sized text, and cross-model reasoning is not counted as retained
-- `Unattributed` is the remaining accounting gap and can include prefix-estimation error, provider overhead, images and reasoning when the provider reports no breakdown
+- `Tool outputs` are measured from the provider-reported growth of the prompt between responses when the prompt cache proves nothing else changed; the detail says `measured`, or names the measured share, and the rest is estimated
+- `Total harness` is the first request's measured prompt when every later request provably reused it; the detail then shows the section rows' estimated sum beside it
+- `Unattributed` is the remaining accounting gap and can include estimation error, provider overhead, images and reasoning when the provider reports no breakdown
 
 The panel's visual grammar is the family design language: see `docs/design-language.md`.
 
