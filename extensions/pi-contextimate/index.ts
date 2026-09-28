@@ -42,7 +42,6 @@ import {
   ratioDetail,
   renderMetricRow,
   tokenLabelLayout,
-  toolOutputDetail,
   type MetricLayout,
   type MetricRow,
   type TokenLabelLayout,
@@ -656,7 +655,7 @@ function buildSnapshot(
     JSON.stringify(config),
     pi.getActiveTools().join(","),
     pi.getAllTools().map((tool) => `${tool.name}:${tool.description.length}`).join(","),
-    session ? `${session.thinkingSummaryChars}:${session.reasoningTokens ?? "unreported"}:${session.toolOutputChars}:${session.messageChars}:${session.messageCount}:${session.contextUsageEstimated}:${session.measuredToolOutputTokens}:${session.measuredToolOutputChars}:${session.firstPrompt ? `${session.firstPrompt.tokens}:${session.firstPrompt.preludeChars}` : "unmeasured"}` : "no-session",
+    session ? JSON.stringify(session) : "no-session",
     contextUsage ? `${contextUsage.tokens}:${contextUsage.contextWindow}:${contextUsage.percent}` : "no-usage",
     preSwitchUsage ? `pre-switch:${preSwitchUsage.billedModel}` : "currency-ok",
   ].join("|");
@@ -819,7 +818,7 @@ function buildSessionEstimate(snapshot: PrefixSnapshot): SessionEstimate | undef
   if (!snapshot.session) return undefined;
   // Provider counts from before a model switch are in the old model's tokens.
   const session = snapshot.preSwitchUsage
-    ? { ...snapshot.session, reasoningTokens: undefined, measuredToolOutputTokens: 0, measuredToolOutputChars: 0 }
+    ? { ...snapshot.session, reasoningTokens: undefined, measuredToolOutputTokens: 0, measuredToolOutputChars: 0, firstPrompt: undefined }
     : snapshot.session;
   return estimateSessionBreakdown(session, {
     denominator: snapshot.heuristic.sessionDenominator,
@@ -849,21 +848,15 @@ function contextWindowLabel(tokens: number): string {
   return compactCount(tokens).replace(/\.0(k|M)$/, "$1");
 }
 
-// The harness total is the first request's measured prompt when the session proves it
-// still holds; the section rows stay estimates either way.
-function harnessFigure(snapshot: PrefixSnapshot): { tokens: number; measured: boolean } {
-  const estimate = buildSessionEstimate(snapshot);
-  return estimate?.harnessSource === "measured"
-    ? { tokens: estimate.harnessTokens, measured: true }
-    : { tokens: totalTokens(snapshot), measured: false };
+function harnessTokens(snapshot: PrefixSnapshot): number {
+  return buildSessionEstimate(snapshot)?.harnessTokens ?? totalTokens(snapshot);
 }
 
 function harnessDetail(snapshot: PrefixSnapshot): string {
-  const harness = harnessFigure(snapshot);
-  const share = ctxShareLabel(harness.tokens, snapshot.contextUsage, { estimate: true });
-  if (!harness.measured) return countDetail(totalChars(snapshot), share ? `· ${share}` : undefined);
-  const rows = `rows ~${compactCount(totalTokens(snapshot))}`;
-  return `(measured${SEP}${rows}${share ? `${SEP}${share}` : ""})`;
+  const share = ctxShareLabel(harnessTokens(snapshot), snapshot.contextUsage, { estimate: true });
+  return buildSessionEstimate(snapshot)?.harnessSource === "measured"
+    ? `(measured${SEP}rows ~${compactCount(totalTokens(snapshot))}${share ? `${SEP}${share}` : ""})`
+    : countDetail(totalChars(snapshot), share ? `· ${share}` : undefined);
 }
 
 // One stacked bar under Total request: the carried part (harness + session) in accent,
@@ -873,7 +866,7 @@ function renderContextBar(snapshot: PrefixSnapshot, estimate: SessionEstimate, t
   if (!usage || usage.tokens === null || usage.contextWindow <= 0) return [];
   const free = Math.max(0, usage.contextWindow - usage.tokens);
   const legend =
-    `harness ~${compactCount(harnessFigure(snapshot).tokens)}${SEP}session ~${compactCount(estimate.totalTokens)}${SEP}free ${compactCount(free)}`;
+    `harness ~${compactCount(estimate.harnessTokens)}${SEP}session ~${compactCount(estimate.totalTokens)}${SEP}free ${compactCount(free)}`;
   const room = Math.max(0, width - 4 - legend.length - 2);
   const sameLine = room >= 12;
   const barWidth = Math.min(28, Math.max(12, sameLine ? room : width - 4));
@@ -892,8 +885,12 @@ function sessionMetrics(snapshot: PrefixSnapshot): SessionMetrics | undefined {
   if (!snapshot.session || !estimate) return undefined;
   const sessionShare = ctxShareLabel(estimate.totalTokens, snapshot.contextUsage, { estimate: true });
   const provenance = estimate.totalSource === "pi" ? "Pi-based" : "heuristic fallback";
+  const { toolOutputChars, measuredToolOutputChars } = snapshot.session;
+  const measured = measuredToolOutputChars === toolOutputChars
+    ? "· measured"
+    : `· ${Math.floor((measuredToolOutputChars / toolOutputChars) * 100)}% measured`;
   const rows: MetricRow[] = [
-    { label: "Tool outputs", tokens: estimate.toolOutputTokens, detail: toolOutputDetail(snapshot.session) },
+    { label: "Tool outputs", tokens: estimate.toolOutputTokens, detail: countDetail(toolOutputChars, measuredToolOutputChars > 0 ? measured : undefined) },
     { label: "Messages", tokens: estimate.messageTokens, detail: countDetail(snapshot.session.messageChars) },
   ];
   if (estimate.thinkingSummaryTokens > 0) {
@@ -962,11 +959,11 @@ function renderSessionRows(session: SessionMetrics | undefined, snapshot: Prefix
 }
 
 function harnessTotalRow(snapshot: PrefixSnapshot): MetricRow {
-  return { label: "Total harness", tokens: harnessFigure(snapshot).tokens, emphasis: true, detail: harnessDetail(snapshot) };
+  return { label: "Total harness", tokens: harnessTokens(snapshot), emphasis: true, detail: harnessDetail(snapshot) };
 }
 
 function summaryTokenLayout(snapshot: PrefixSnapshot): TokenLabelLayout {
-  const values = [...snapshot.sections.map(sectionTokens), harnessFigure(snapshot).tokens];
+  const values = [...snapshot.sections.map(sectionTokens), harnessTokens(snapshot)];
   const sessionEstimate = buildSessionEstimate(snapshot);
   if (sessionEstimate) values.push(
     sessionEstimate.totalTokens,
@@ -1024,7 +1021,7 @@ function compactLayout(snapshot: PrefixSnapshot): CompactLayout {
   const tokenLayout = tokenLabelLayout([
     ...snapshot.sections.map(sectionTokens),
     ...numericRowTokens(rows),
-    harnessFigure(snapshot).tokens,
+    harnessTokens(snapshot),
   ]);
   return { labelWidth, tokenLayout };
 }
@@ -1054,7 +1051,7 @@ function renderScanRows(rows: ScanRow[], theme: Theme, width: number, layout?: C
 
 function renderCompactTotalRow(snapshot: PrefixSnapshot, theme: Theme, layout: CompactLayout): string {
   const label = compactLabel("Total harness", layout.labelWidth + 2);
-  const token = `${estimatedTokenLabel(harnessFigure(snapshot).tokens, layout.tokenLayout)} tokens`;
+  const token = `${estimatedTokenLabel(harnessTokens(snapshot), layout.tokenLayout)} tokens`;
   return `  ${accent(theme, theme.bold(`${label}  ${token}`))} ${theme.fg("dim", harnessDetail(snapshot))}`;
 }
 

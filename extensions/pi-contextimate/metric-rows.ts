@@ -6,7 +6,6 @@ import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { compactCount } from "../_lib/fmt.ts";
 import { estimateCharsAsTokens } from "../_lib/heuristics.ts";
 import { ELLIPSIS, GLYPH, ink } from "../_lib/style.ts";
-import type { SessionBreakdown } from "./session-accounting.ts";
 
 export type TokenLabelLayout = { unitWidth: number; fieldWidth: number };
 
@@ -123,13 +122,4 @@ export function countDetail(chars: number, detail?: string): string {
 
 export function inlineCount(chars: number, denominator: number): string {
   return `~${compactCount(estimateCharsAsTokens(chars, denominator))} tokens ${countDetail(chars, ratioDetail(denominator))}`;
-}
-
-// Measured counts say so; a partial measurement names its share of the characters.
-export function toolOutputDetail(session: SessionBreakdown): string {
-  const measuredChars = session.measuredToolOutputChars;
-  if (measuredChars === 0) return countDetail(session.toolOutputChars);
-  if (measuredChars === session.toolOutputChars) return countDetail(session.toolOutputChars, "· measured");
-  const share = Math.floor((measuredChars / session.toolOutputChars) * 100);
-  return countDetail(session.toolOutputChars, `· ${share}% measured`);
 }

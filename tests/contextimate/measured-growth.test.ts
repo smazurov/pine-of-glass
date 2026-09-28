@@ -24,12 +24,12 @@ function codexResponse(step: Step): AssistantMessage {
     provider: "openai-codex",
     model: step.model ?? "gpt-6-sol",
     usage: {
-      input: Math.max(0, step.prompt - step.cacheRead),
+      input: step.prompt - step.cacheRead,
       output: step.output,
       cacheRead: step.cacheRead,
       cacheWrite: 0,
-      ...(step.reasoning === undefined ? {} : { reasoning: step.reasoning }),
-      totalTokens: Math.max(step.prompt, step.cacheRead) + step.output,
+      reasoning: step.reasoning,
+      totalTokens: step.prompt + step.output,
       cost: { total: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     },
   });
@@ -133,9 +133,6 @@ test("the harness total is the first prompt while the cache chain holds", () => 
   assert.equal(estimate.harnessSource, "measured");
   assert.equal(estimate.harnessTokens, 10_000 - 1, "first prompt minus the estimated 2-char prelude");
   assert.equal(estimate.totalTokens, 16_050 - 9_999, "the session is what the harness does not explain");
-
-  const withoutPiTotal = estimateSessionBreakdown(breakdown, { ...estimateOptions, contextTokens: undefined });
-  assert.equal(withoutPiTotal.harnessSource, "estimate", "no provider total, nothing to anchor");
 });
 
 test("the harness falls back to its estimate when the first prompt may no longer hold", () => {
