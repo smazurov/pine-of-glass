@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.14.0 (2026-09-28)
+
+- Contextimate measures tool outputs from the provider's own prompt counts. When two
+  responses reuse one cached prompt, the prompt grew by exactly the replayed response
+  plus the tool results, so those tool results are counted at that growth instead of
+  characters ÷ 4. Dense output such as a binary dump no longer lands in `Unattributed`:
+  on the session that prompted this, it fell from 20.6k tokens to 30. Rows say
+  `measured`, or the measured share. Cache misses, model changes and compaction fall back
+  to the estimate. [#131](https://github.com/tmustier/pine-of-glass/pull/131)
+- Contextimate's `Total harness` uses the first request's measured prompt when every later
+  request provably reused it, and shows the estimated rows beside it
+  (`measured · rows ~17.2k`). [#131](https://github.com/tmustier/pine-of-glass/pull/131)
+- Contextimate's OpenAI estimates are recalibrated for every OpenAI model. Live counts
+  were identical on GPT-5.5, GPT-5.6 and GPT-6, so GPT-6 did not change the tokenizer.
+  [#132](https://github.com/tmustier/pine-of-glass/pull/132),
+  [#133](https://github.com/tmustier/pine-of-glass/pull/133):
+  - text uses ÷ 4.4 instead of ÷ 4, the median across 96 local instruction files
+  - tools are rendered as the TypeScript-style declarations OpenAI shows the model, then
+    counted with the `o200k_base` pre-tokenizer pattern; realistic tool sets land within
+    2.3% median (7.7% p90) against 424 provider-counted tools, where the old formula
+    was 26 to 40% low
+  - direct OpenAI and Azure Responses routes use the same estimates; they were not
+    probed separately
+- Contextimate keeps its token column readable on narrow terminals: labels shrink to
+  the widest label and detail text wraps under the token column.
+  [#130](https://github.com/tmustier/pine-of-glass/pull/130)
+
 ## 0.13.0 (2026-09-26)
 
 - Cachemire times direct Anthropic cache expiry from the provider's response start
