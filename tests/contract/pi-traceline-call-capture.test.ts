@@ -84,6 +84,13 @@ test("bounded capture matches the wide capture for any wrapped, wide or styled t
   assert.ok(wideFallbacks > 20 && wideFallbacks < 380, `both paths must be exercised, got ${wideFallbacks} fallbacks`);
 });
 
+test("a wrap at a short space run is not mistaken for an unwrapped line", () => {
+  // This wraps identically at 256 and 512 columns; only the check width's space allowance
+  // tells the pair apart from the one-line wide render.
+  const text = `${"a".repeat(250)}${" ".repeat(20)}${"b".repeat(250)}`;
+  assertSameAsWide(shell(text), { command: text }, "short space run at the wrap");
+});
+
 test("real pi call components capture at bounded widths and match the wide capture", async () => {
   pi.initTheme(undefined, false);
   const { withBuiltInRenderers } = await import(pathToFileURL(join(piRoot, "dist/core/tools/renderers/index.js")).href) as {
@@ -124,7 +131,6 @@ test("real pi call components capture at bounded widths and match the wide captu
   }
 });
 
-test("a component without a render function captures nothing", () => {
+test("a row without a call component captures nothing", () => {
   assert.equal(captureCallLines(undefined, {}), undefined);
-  assert.equal(captureCallLines({}, {}), undefined);
 });

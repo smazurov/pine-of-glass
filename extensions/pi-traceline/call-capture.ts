@@ -23,17 +23,19 @@ const NARROW_CAPTURE_WIDTHS = [256, 1_024];
 // remains uncovered is a line wider than a check width whose text does not come from the
 // args (an edit's on-disk diff context) wrapping exactly at such a run.
 const MAX_SPACE_RUN = 64;
-const checkWidth = (narrow: number): number => narrow * 2 + 2 + MAX_SPACE_RUN;
 const LONG_SPACE_RUN = new RegExp(` {${MAX_SPACE_RUN},}`);
 
 /** The call component's lines as a wide capture would render them, trailing padding aside. */
 export function captureCallLines(call: ToolCallRendererLike | undefined, args: ToolArgsLike | undefined): string[] | undefined {
   const render = call?.render;
-  if (!call || typeof render !== "function") return undefined;
-  if (!argsHaveLongSpaceRun(args)) {
+  if (!render) return undefined;
+  if (!LONG_SPACE_RUN.test(JSON.stringify(args ?? {}))) {
     for (const width of NARROW_CAPTURE_WIDTHS) {
       const narrow = renderedLines(render.call(call, width));
-      if (sameContent(narrow, renderedLines(render.call(call, checkWidth(width))))) return narrow;
+      const check = renderedLines(render.call(call, width * 2 + 2 + MAX_SPACE_RUN));
+      if (narrow.length === check.length && narrow.every((line, i) => withoutTrailingPadding(line) === withoutTrailingPadding(check[i]!))) {
+        return narrow;
+      }
     }
   }
   return renderedLines(render.call(call, WIDE_CAPTURE_WIDTH));
@@ -41,19 +43,6 @@ export function captureCallLines(call: ToolCallRendererLike | undefined, args: T
 
 function renderedLines(rendered: unknown): string[] {
   return Array.isArray(rendered) ? rendered.map((line) => String(line)) : [];
-}
-
-function argsHaveLongSpaceRun(args: ToolArgsLike | undefined): boolean {
-  if (!args) return false;
-  try {
-    return LONG_SPACE_RUN.test(JSON.stringify(args));
-  } catch {
-    return true; // unserializable args: take the wide capture rather than guess
-  }
-}
-
-function sameContent(a: string[], b: string[]): boolean {
-  return a.length === b.length && a.every((line, index) => withoutTrailingPadding(line) === withoutTrailingPadding(b[index]!));
 }
 
 /** The line up to its last visible non-space cell, then its trailing escape sequences with

@@ -211,36 +211,6 @@ function columnBoundary(
   return { plainIndex: text.length, column };
 }
 
-/** Where a middle truncation's retained tail starts in the stripped line, and its width. */
-type TailCut = { plainIndex: number; width: number };
-
-/** The tail cut by the forward scan: exact for every input, but O(line). */
-function forwardTailCut(text: string, maxTail: number): TailCut {
-  const visLen = visibleWidth(text);
-  const boundary = columnBoundary(text, visLen - maxTail, "up");
-  return { plainIndex: boundary.plainIndex, width: visLen - boundary.column };
-}
-
-/** The tail cut, found from the end: the longest grapheme-aligned tail whose width stays
- * within `maxTail`. Equal to `columnBoundary(text, visibleWidth(text) - maxTail, "up")`
- * whenever per-grapheme widths sum to `visibleWidth(text)`, and costs O(tail) instead of
- * O(line): `Segments.containing()` resolves each boundary locally, so a 26k-character
- * tool line no longer pays a full grapheme walk to keep its last few dozen columns. */
-function tailBoundary(text: string, maxTail: number): TailCut {
-  const segments = graphemeSegmenter.segment(text);
-  let plainIndex = text.length;
-  let width = 0;
-  while (plainIndex > 0) {
-    const grapheme = segments.containing(plainIndex - 1);
-    if (!grapheme) break;
-    const next = width + visibleWidth(grapheme.segment);
-    if (next > maxTail) break;
-    width = next;
-    plainIndex = grapheme.index;
-  }
-  return { plainIndex, width };
-}
-
 export function middleTruncate(line: string, width: number, theme?: Theme): string {
   const maxWidth = Math.max(1, width);
   if (visibleWidth(line) <= maxWidth) return line;
@@ -256,14 +226,32 @@ export function middleTruncate(line: string, width: number, theme?: Theme): stri
   // the head exactly fills the rest, so every line truncated to the same budget cuts at
   // identical columns and fills the budget exactly. Wide graphemes that cross either cut
   // round out of the retained spans; padding keeps the ellipsis and right edge fixed.
-  // The backward walk sums per-grapheme widths, which equal visibleWidth(vis) unless an
-  // escape survived stripAnsi (visibleWidth strips more kinds) or a tab is present (it
-  // expands to three spaces before segmenting). Those rare lines keep the forward scan.
-  const tail = vis.includes("\x1b") || vis.includes("\t") ? forwardTailCut(vis, maxTail) : tailBoundary(vis, maxTail);
+  // The tail is found walking back from the end, so a 26k-character tool line pays for
+  // the columns it keeps rather than a full grapheme walk. Summing per-grapheme widths
+  // matches visibleWidth(vis) unless an escape survived stripAnsi (visibleWidth strips
+  // more kinds) or a tab is present (it expands before segmenting); those lines scan
+  // forward from the start instead.
+  let tailStart = vis.length;
+  let tailWidth = 0;
+  if (vis.includes("\x1b") || vis.includes("\t")) {
+    const visLen = visibleWidth(vis);
+    const boundary = columnBoundary(vis, visLen - maxTail, "up");
+    tailStart = boundary.plainIndex;
+    tailWidth = visLen - boundary.column;
+  } else {
+    const segments = graphemeSegmenter.segment(vis);
+    while (tailStart > 0) {
+      const grapheme = segments.containing(tailStart - 1)!;
+      const graphemeWidth = visibleWidth(grapheme.segment);
+      if (tailWidth + graphemeWidth > maxTail) break;
+      tailWidth += graphemeWidth;
+      tailStart = grapheme.index;
+    }
+  }
   const dimEllipsis = ink(theme, "dim", ELLIPSIS);
-  const tailRawStart = rawIndexAtVisibleIndex(line, tail.plainIndex);
+  const tailRawStart = rawIndexAtVisibleIndex(line, tailStart);
   const tailRaw = `${activeSgrAt(line, tailRawStart)}${line.slice(tailRawStart)}`;
-  const tailPadding = Math.max(0, maxTail - tail.width);
+  const tailPadding = Math.max(0, maxTail - tailWidth);
 
   const headEnd = budget - maxTail;
   if (headEnd <= 0) return `${dimEllipsis}${" ".repeat(tailPadding)}${tailRaw}`;
