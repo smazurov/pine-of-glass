@@ -1,6 +1,6 @@
 
 [Contextimate] summary → compact → expanded
-  <expand-key>: cycle view · model openai-codex/gpt-5.5 · counts ch ÷ 4 · tools: OpenAI formula (OpenAI-Codex heuristic)
+  <expand-key>: cycle view · model openai-codex/gpt-5.5 · counts ch ÷ 4.4 · session ÷ 4 · tools: OpenAI formula (OpenAI-Codex heuristic)
 
   ▸ Runtime system prompt  ~0.0k tokens (0.2k ch)
 
@@ -23,7 +23,7 @@
   Messages                                   ~2.0k tokens (8.1k ch)
   Thinking summaries                         ~0.3k tokens (1.2k ch)
   Reasoning context                          12.0k tokens (provider)
-  Unattributed                              ~36.7k tokens (accounting gap)
+  Unattributed                              ~36.6k tokens (accounting gap)
   Total session                             ~64.1k tokens (~32% ctx · Pi-based)
   Total request                              64.3k tokens (32.2% / 200k ctx)
   █████████▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒  harness ~0.3k · session ~64.1k · free 135.7k

@@ -27,7 +27,7 @@ Providers convert tool schemas into an internal function representation, so no r
 
 Divisors were measured with Anthropic's `messages/count_tokens` endpoint and controlled live probes, against the same payloads Pi sends (2026-06-02).
 
-The decisive finding: Claude 4.7 changed tokenizer accounting. The identical captured Pi request counts 29,258 input tokens on `claude-opus-4-5` and 40,758 on `claude-opus-4-7`, and the count endpoint matched live accounting within 15 tokens. Against real Pi startup material this puts Claude 4.5/4.6 near chars ÷ 3.5 to 3.8 and Claude 4.7/4.8 near chars ÷ 2.6. Claude 5-generation ids (`claude-fable-5`, `claude-opus-5`) keep the post-4.7 accounting and get the same ÷ 2.6 rule; a live fable-5 request measured well below the generic anthropic ÷ 3.5 default. OpenAI-Codex markdown-ish system text measured close to chars ÷ 4.
+The decisive finding: Claude 4.7 changed tokenizer accounting. The identical captured Pi request counts 29,258 input tokens on `claude-opus-4-5` and 40,758 on `claude-opus-4-7`, and the count endpoint matched live accounting within 15 tokens. Against real Pi startup material this puts Claude 4.5/4.6 near chars ÷ 3.5 to 3.8 and Claude 4.7/4.8 near chars ÷ 2.6. Claude 5-generation ids (`claude-fable-5`, `claude-opus-5`) keep the post-4.7 accounting and get the same ÷ 2.6 rule; a live fable-5 request measured well below the generic anthropic ÷ 3.5 default. OpenAI text is recalibrated below.
 
 A follow-up count on 3 August 2026 established the Claude 4.7+ family boundary. One byte-identical Pi payload counted 17,382 tokens on both `claude-fable-5` and `claude-opus-4-8`; `claude-opus-5` differed by only 4 once-per-tool-block overhead tokens and had the same 16,116-token system count. Contextimate therefore applies the Claude 4.7+ text profile to Fable 5 and Opus 5, including explicit Radius and OpenRouter relays whose model ids identify that downstream tokenizer. Bedrock Claude uses the same model-family text ratio while retaining its own provider payload shape and unmeasured tool divisor.
 
@@ -39,6 +39,7 @@ A second study on 5 August 2026 covered Gemini, Kimi, GLM, Cohere, Grok, DeepSee
 
 | Visible-text profile | Text divisor | Session divisor |
 |---|---:|---:|
+| OpenAI (Codex, Responses and Azure) | 4.4 | 4.0 |
 | Kimi K2 through K3 | 4.1 | 3.8 |
 | GLM 4.5 variants, 4.6 variants and standard 4.7 | 4.0 | 3.9 |
 | GLM 4.7-Flash, 5, 5.1 and 5.2 | 4.0 | 3.9 |
@@ -51,29 +52,35 @@ A second study on 5 August 2026 covered Gemini, Kimi, GLM, Cohere, Grok, DeepSee
 | Qwen 2.5 and 3 | 4.0 | 3.8 |
 | Qwen 3.5 | 3.9 | 3.5 |
 
+A third study on 28 September 2026 measured OpenAI directly. It sent the same payloads to GPT-5.5, GPT-5.6 Sol and Luna, and GPT-6 Sol and Luna through Codex, adding one piece of content at a time to a fixed baseline. Every model gave identical counts, and system text counted exactly as `o200k_base` plus a fixed 14-token wrapper, so GPT-6 did not change the tokenizer. Across 96 local AGENTS.md and CLAUDE.md files, `o200k_base` gives a median of 4.4 characters per token (pooled 4.3), so OpenAI text uses ÷ 4.4 instead of ÷ 4. The session divisor stays ÷ 4 because tool output is denser than instructions.
+
 These profiles cover visible text only. Dynamic aliases and unverified variants keep the generic estimate or fallback. The [tokenizer coverage audit](./contextimate-tokenizer-coverage-audit-2026-08-05.md) records the evidence and family boundaries.
 
 ## Tool schemas
 
-Raw size fails in both directions: minified JSON at chars ÷ 4 overcounts OpenAI schemas by roughly 2x, and no single divisor tracks schema shape (enums, nesting, description length).
+OpenAI does not send tool JSON to the model as-is. It renders each function as a TypeScript-style declaration, which keeps names, descriptions and types but drops most of the JSON syntax. Its [token-counting docs](https://developers.openai.com/api/docs/guides/token-counting) recommend the count endpoint for tools, but that needs an API key and a network call at startup, and Codex OAuth has no count endpoint.
 
-For OpenAI-style function tools the extension uses the OpenAI Cookbook-style local formula: fixed constants per function, per property level, per property and per enum value, plus schema text fragments (`name:description`, `propertyName:type:description`, enum values) estimated at chars ÷ 6.6. OpenAI's [token-counting docs](https://developers.openai.com/api/docs/guides/token-counting) say tools are hard to count locally and recommend their count endpoint; the [Cookbook formula](https://developers.openai.com/cookbook/examples/how_to_count_tokens_with_tiktoken) is the public local approximation, and the extension stays local to avoid startup network calls (which are also unavailable on Codex OAuth auth).
-
-A synthetic schema ablation (2026-06-03: 20 schema shapes from empty to deeply nested, singletons and mixed subsets, constants fitted on two thirds of singletons only) validated it on held-out cases:
+Contextimate therefore estimates each OpenAI tool from its Responses payload (`openai-cookbook`, a name kept for config compatibility):
 
 ```text
-method                         held-out MAPE
-recursive formula, text ÷ 6.6       9.1%
-fitted raw divisor (÷ 7.215)       13.1%
-raw minified chars ÷ 5.5           33.2%
-raw minified chars ÷ 4             78.4%
+tool tokens = max(chars ÷ 8, (chars − 190) ÷ 4.5)
+tools total = 16 + the sum of tool tokens
 ```
 
-Two changes made the formula win: counting nested-object and array-item properties recursively, and moving text fragments from chars ÷ 4 to chars ÷ 6.6.
+The 190 characters are roughly the JSON envelope the render drops, and ÷ 8 keeps very small tools from rounding to nothing. The constants come from live counts on 28 September 2026. Each of 179 real tools (21 Pi and extension tools plus 158 MCP tools from 22 servers) was sent alone, and the prompt minus a no-tool baseline gave its exact cost. The tool block adds exactly 16 tokens once. Counts were identical on GPT-5.5, GPT-5.6 and GPT-6, and a sample of tools counted exactly under a local render of that TypeScript form.
 
-Claude tool payloads measured near their text divisors (÷ 3.36 on Claude 4.5/4.6, ÷ 2.5 on the Claude 4.7+ family), so they use divisors of 3.3 and 2.6. Direct OpenAI Responses and Codex routes use ÷ 5.5 from OpenAI-Codex probes. Models that merely share Anthropic, OpenAI Chat or Responses wire formats use the matching payload shape with the fallback ÷ 4, not the upstream tokenizer. Unmeasured Gemini and Bedrock tool payloads also use ÷ 4.
+```text
+method                                random 10–40-tool sets, median (p90) error
+previous cookbook-style formula       34.6% (49.9%)
+raw minified chars ÷ 5.5              7.2% (12.0%)
+max(chars ÷ 8, (chars − 190) ÷ 4.5)   1.9% (4.7%)
+```
 
-In the UI, a formula-counted tools row says `OpenAI formula · schema text ÷ 6.6` and its character count is a payload-size cue only: it is not what gets divided. Divisor-counted rows say things like `÷ 2.6 · Anthropic tool payload`. Each tool's own row is counted on that tool's own shaped payload or formula subtotal, and the schema tree is just the readable rendering of it.
+Fitted on the 158 MCP tools alone, the formula was within 3% on the 21 held-out extension tools. Single tools vary more (median error 7%): deeply nested schemas such as `edit` come out high.
+
+Claude tool payloads measured near their text divisors (÷ 3.36 on Claude 4.5/4.6, ÷ 2.5 on the Claude 4.7+ family), so they use divisors of 3.3 and 2.6. Direct OpenAI Responses and Azure routes use the same OpenAI formula as Codex; they were not probed separately. Models that merely share Anthropic, OpenAI Chat or Responses wire formats use the matching payload shape with the fallback ÷ 4, not the upstream tokenizer. Unmeasured Gemini and Bedrock tool payloads also use ÷ 4.
+
+In the UI, a formula-counted tools row says `÷ 4.5 · OpenAI formula`: its character count is the Responses payload before each tool's envelope allowance. Divisor-counted rows say things like `÷ 2.6 · Anthropic tool payload`. Each tool's own row is counted on that tool's own shaped payload or formula subtotal, and the schema tree is just the readable rendering of it.
 
 ## Session rows and the total
 
@@ -171,7 +178,7 @@ Later files override scalar fields, `profiles` merge by name, and `rules` append
 
 `toolNumerator` picks the payload format to count:
 
-- `openai-cookbook`: the local formula above (the OpenAI-Codex default; the name is kept for config compatibility)
+- `openai-cookbook`: the OpenAI formula above, with `toolDenominator` as its divisor (the OpenAI default; the name is kept for config compatibility)
 - `openai-responses` / `openai-codex-responses`: Responses-style function objects
 - `openai-chat` / `openai-completions` / `mistral`: Chat Completions-style `{ type, function }` objects
 - `anthropic`: `{ name, description, input_schema }`

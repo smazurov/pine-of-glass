@@ -180,10 +180,10 @@ function tokenizerProfile(model: ModelSummary): TokenizerProfile | undefined {
   if (QWEN_35_MODEL.test(id)) return QWEN_35;
   if (QWEN_25_MODEL.test(id) || QWEN_3_MODEL.test(id)) return QWEN_25_3;
   if (model.provider.toLowerCase().includes("openai-codex")) {
-    return { label: "OpenAI-Codex heuristic", textDenominator: 4, sessionDenominator: 4 };
+    return { label: "OpenAI-Codex heuristic", textDenominator: 4.4, sessionDenominator: 4 };
   }
   if (model.provider.toLowerCase().includes("openai")) {
-    return { label: "OpenAI Responses heuristic", textDenominator: 4, sessionDenominator: 4 };
+    return { label: "OpenAI Responses heuristic", textDenominator: 4.4, sessionDenominator: 4 };
   }
   if (model.provider.toLowerCase().includes("google") || model.id.toLowerCase().includes("gemini")) {
     return { label: "Gemini/Vertex heuristic", textDenominator: 4, sessionDenominator: 4 };
@@ -194,7 +194,7 @@ function tokenizerProfile(model: ModelSummary): TokenizerProfile | undefined {
 function toolProfile(model: ModelSummary): ToolProfile | undefined {
   const provider = model.provider.toLowerCase();
   const api = model.api.toLowerCase();
-  if (provider.includes("openai-codex")) return { toolDenominator: 5.5, toolNumerator: "openai-cookbook" };
+  if (provider.includes("openai-codex")) return { toolDenominator: 4.5, toolNumerator: "openai-cookbook" };
   if (api === "anthropic-messages") {
     let denominator = 4;
     if (isClaudeModel(model)) denominator = CLAUDE_47_PLUS_MODEL.test(model.id.toLowerCase()) ? 2.6 : 3.3;
@@ -207,7 +207,9 @@ function toolProfile(model: ModelSummary): ToolProfile | undefined {
   if (api === "bedrock-converse-stream") return { toolDenominator: 4, toolNumerator: "bedrock" };
   if (api === "pi-messages") return { toolDenominator: 4, toolNumerator: "pi-messages" };
   if (api === "openai-responses" || api === "azure-openai-responses") {
-    return { toolDenominator: provider.includes("openai") ? 5.5 : 4, toolNumerator: "openai-responses" };
+    return provider.includes("openai")
+      ? { toolDenominator: 4.5, toolNumerator: "openai-cookbook" }
+      : { toolDenominator: 4, toolNumerator: "openai-responses" };
   }
   return undefined;
 }

@@ -1,8 +1,8 @@
 
 [Contextimate] summary → compact → expanded
-  <expand-key>: cycle view · model openai-codex/gpt-5.5 · counts ch ÷ 4 · tools: OpenAI formula (OpenAI-Codex heuristic)
+  <expand-key>: cycle view · model openai-codex/gpt-5.5 · counts ch ÷ 4.4 · session ÷ 4 · tools: OpenAI formula (OpenAI-Codex heuristic)
 
-  ▸ Runtime system prompt                    ~0.1k tokens (0.2k ch)
+  ▸ Runtime system prompt                    ~0.0k tokens (0.2k ch)
   ▸ Global AGENTS.md                         ~0.0k tokens (0.1k ch)
   ▸ ~/projects/demo/AGENTS.md                ~0.0k tokens (0.1k ch)
   ▸ Skill frontmatter (3)                    ~0.2k tokens (0.9k ch)

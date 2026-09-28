@@ -1,6 +1,6 @@
 // Provider tool payload formats and token estimators shared by the family.
 
-import { isJsonObject, type JsonValue } from "./boundary.ts";
+import { isJsonObject } from "./boundary.ts";
 import { estimateCharsAsTokens, type HeuristicNumbers } from "./heuristics.ts";
 
 /** The slice of a tool definition the estimators need; contextimate's ToolSummary
@@ -10,10 +10,6 @@ export type ToolDefinition = {
   description: string;
   schema: unknown;
 };
-
-// Character fragments of OpenAI tool-schema summaries tokenize denser than prose;
-// see estimateOpenAIFunctionToolTokens for the ablation this constant came from.
-export const OPENAI_TOOL_TEXT_FRAGMENT_DENOMINATOR = 6.6;
 
 // --- JSON schema readers shared by the tool estimators -----------------------------------
 
@@ -39,11 +35,6 @@ export function schemaPropertyType(property: unknown): string {
 export function schemaPropertyDescription(property: unknown): string {
   if (!isJsonObject(property)) return "";
   return typeof property.description === "string" ? trimFinalPeriod(property.description) : "";
-}
-
-function schemaPropertyEnum(property: unknown): JsonValue[] {
-  if (!isJsonObject(property) || !Array.isArray(property.enum)) return [];
-  return property.enum;
 }
 
 export function schemaArrayItemProperties(property: unknown): Record<string, unknown> {
@@ -163,63 +154,21 @@ export function toolPayloadLabel(format: string): string {
   }
 }
 
-// --- OpenAI cookbook-style tool formula ---------------------------------------------------
+// --- OpenAI tool formula ------------------------------------------------------------------
 
-function estimateOpenAIToolTextTokens(text: string): number {
-  return estimateCharsAsTokens(text.length, OPENAI_TOOL_TEXT_FRAGMENT_DENOMINATOR);
+// OpenAI renders each function as a TypeScript-style declaration, which drops most of its
+// JSON envelope. Live counts of 179 tools fit these constants; see docs/pi-contextimate.md.
+const OPENAI_TOOL_ENVELOPE_CHARS = 190;
+const OPENAI_SMALL_TOOL_DENOMINATOR = 8;
+const OPENAI_TOOL_BLOCK_TOKENS = 16;
+
+export function estimateOpenAIToolDefinitionTokens(tool: ToolDefinition, denominator: number): number {
+  const chars = safeMinifiedJson(openAIResponsesToolPayload(tool)).length;
+  return Math.ceil(Math.max(chars / OPENAI_SMALL_TOOL_DENOMINATOR, (chars - OPENAI_TOOL_ENVELOPE_CHARS) / denominator));
 }
 
-export function estimateOpenAIToolDefinitionTokens(tool: ToolDefinition): number {
-  let tokens = 7;
-  tokens += estimateOpenAIToolTextTokens(`${tool.name}:${trimFinalPeriod(tool.description)}`);
-  const propertyEntries = Object.entries(getSchemaProperties(tool.schema));
-  if (propertyEntries.length > 0) tokens += 3;
-  for (const [propertyName, property] of propertyEntries) tokens += estimateOpenAIPropertyTokens(propertyName, property);
-  return tokens;
-}
-
-function estimateOpenAIPropertyTokens(propertyName: string, property: unknown): number {
-  const propInit = 3;
-  const propKey = 3;
-  const enumInit = -3;
-  const enumItem = 3;
-
-  let tokens = propKey;
-  const enumValues = schemaPropertyEnum(property);
-  if (enumValues.length > 0) {
-    tokens += enumInit;
-    for (const enumValue of enumValues) tokens += enumItem + estimateOpenAIToolTextTokens(String(enumValue));
-  }
-  tokens += estimateOpenAIToolTextTokens(`${propertyName}:${schemaPropertyType(property)}:${schemaPropertyDescription(property)}`);
-
-  const nestedEntries = Object.entries(getSchemaProperties(property));
-  if (nestedEntries.length > 0) {
-    tokens += propInit;
-    for (const [nestedName, nestedProperty] of nestedEntries) tokens += estimateOpenAIPropertyTokens(nestedName, nestedProperty);
-  }
-
-  const itemEntries = Object.entries(schemaArrayItemProperties(property));
-  if (itemEntries.length > 0) {
-    tokens += propInit;
-    for (const [itemName, itemProperty] of itemEntries) tokens += estimateOpenAIPropertyTokens(itemName, itemProperty);
-  }
-
-  return tokens;
-}
-
-export function estimateOpenAIFunctionToolTokens(tools: ToolDefinition[]): number {
-  // OpenAI's public token-counting docs say exact tool counts need the Responses
-  // input-token endpoint. For no-API-call startup estimates, use the older
-  // cookbook/tiktoken-style schema-summary formula: model-specific constants plus
-  // name/description/property summaries, not raw schema JSON. Current public
-  // tiktoken maps GPT-5 and GPT-4o families to o200k_base, so use the GPT-4o/GPT-5
-  // family constants. A synthetic schema ablation found chars/6.6 over these schema
-  // text fragments, plus recursive nested property counting, beats raw schema-char
-  // denominators on held-out mixed schemas while remaining dependency-free.
-  let tokens = 0;
-  for (const tool of tools) tokens += estimateOpenAIToolDefinitionTokens(tool);
-  if (tools.length > 0) tokens += 12;
-  return tokens;
+export function estimateOpenAIFunctionToolTokens(tools: ToolDefinition[], denominator: number): number {
+  return tools.reduce((sum, tool) => sum + estimateOpenAIToolDefinitionTokens(tool, denominator), OPENAI_TOOL_BLOCK_TOKENS);
 }
 
 /** Total estimated tokens for a tool list under a family heuristic: the cookbook
@@ -229,7 +178,7 @@ export function estimateToolListTokens(
   heuristic: Pick<HeuristicNumbers, "toolNumerator" | "toolDenominator">,
 ): number {
   if (tools.length === 0) return 0;
-  if (heuristic.toolNumerator === "openai-cookbook") return estimateOpenAIFunctionToolTokens(tools);
+  if (heuristic.toolNumerator === "openai-cookbook") return estimateOpenAIFunctionToolTokens(tools, heuristic.toolDenominator);
   const content = safeMinifiedJson(aggregateToolPayload(tools, heuristic.toolNumerator));
   return estimateCharsAsTokens(content.length, heuristic.toolDenominator);
 }

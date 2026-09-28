@@ -21,7 +21,6 @@ import {
   estimateOpenAIToolDefinitionTokens,
   getSchemaProperties,
   getSchemaRequired,
-  OPENAI_TOOL_TEXT_FRAGMENT_DENOMINATOR,
   openAIResponsesToolPayload,
   safeMinifiedJson,
   schemaArrayItemProperties,
@@ -478,7 +477,7 @@ function buildToolNumerator(tools: ToolSummary[], heuristic: ResolvedHeuristic):
       label: "OpenAI-style local formula",
       content,
       chars: content.length,
-      tokens: estimateOpenAIFunctionToolTokens(tools),
+      tokens: estimateOpenAIFunctionToolTokens(tools, heuristic.toolDenominator),
     };
   }
   const content = safeMinifiedJson(aggregateToolPayload(tools, numerator));
@@ -527,7 +526,7 @@ function buildToolDisplayEstimate(tool: ToolSummary, heuristic: ResolvedHeuristi
   const numerator = heuristic.toolNumerator;
   const chars = safeMinifiedJson(toolPayload(tool, numerator)).length;
   if (numerator === "openai-cookbook") {
-    return { tokens: estimateOpenAIToolDefinitionTokens(tool), chars };
+    return { tokens: estimateOpenAIToolDefinitionTokens(tool, heuristic.toolDenominator), chars };
   }
   return { tokens: estimateCharsAsTokens(chars, heuristic.toolDenominator), chars };
 }
@@ -547,7 +546,7 @@ function buildToolsSection(pi: ExtensionAPI, heuristic: ResolvedHeuristic): { se
   const denominator = heuristic.toolDenominator;
   const effectiveTokens = numerator.tokens ?? estimateCharsAsTokens(numerator.chars, denominator);
   const sectionDetail = typeof numerator.tokens === "number"
-    ? `· OpenAI formula · schema text ${ratioDetail(OPENAI_TOOL_TEXT_FRAGMENT_DENOMINATOR)}`
+    ? `${ratioDetail(denominator)} · OpenAI formula`
     : `${ratioDetail(denominator)} · ${numerator.label}`;
   const toolEstimates = tools.map((tool) => ({ tool, estimate: buildToolDisplayEstimate(tool, heuristic) }));
   const sortedEstimates = [...toolEstimates].sort((a, b) => b.estimate.tokens - a.estimate.tokens || a.tool.name.localeCompare(b.tool.name));
