@@ -1,5 +1,5 @@
 {
-  "_source": "openai-codex/gpt-6-sol prompt tokens with one tool, less the no-tool prompt and the 16-token tool block; identical on gpt-5.5, gpt-5.6 and gpt-6 (2026-09-28)",
+  "_source": "openai-codex/gpt-6-sol prompt tokens with one tool, less the no-tool prompt and the 16-token tool block; the last seven are structure-heavy probes (2026-09-28)",
   "blockTokens": 16,
   "tools": [
     {
@@ -172,6 +172,550 @@
         }
       },
       "measuredTokens": 23
+    },
+    {
+      "name": "lit30",
+      "description": "Synthetic structure-heavy test tool.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "region": {
+            "anyOf": [
+              {
+                "const": "region-0",
+                "type": "string"
+              },
+              {
+                "const": "region-1",
+                "type": "string"
+              },
+              {
+                "const": "region-2",
+                "type": "string"
+              },
+              {
+                "const": "region-3",
+                "type": "string"
+              },
+              {
+                "const": "region-4",
+                "type": "string"
+              },
+              {
+                "const": "region-5",
+                "type": "string"
+              },
+              {
+                "const": "region-6",
+                "type": "string"
+              },
+              {
+                "const": "region-7",
+                "type": "string"
+              },
+              {
+                "const": "region-8",
+                "type": "string"
+              },
+              {
+                "const": "region-9",
+                "type": "string"
+              },
+              {
+                "const": "region-10",
+                "type": "string"
+              },
+              {
+                "const": "region-11",
+                "type": "string"
+              },
+              {
+                "const": "region-12",
+                "type": "string"
+              },
+              {
+                "const": "region-13",
+                "type": "string"
+              },
+              {
+                "const": "region-14",
+                "type": "string"
+              },
+              {
+                "const": "region-15",
+                "type": "string"
+              },
+              {
+                "const": "region-16",
+                "type": "string"
+              },
+              {
+                "const": "region-17",
+                "type": "string"
+              },
+              {
+                "const": "region-18",
+                "type": "string"
+              },
+              {
+                "const": "region-19",
+                "type": "string"
+              },
+              {
+                "const": "region-20",
+                "type": "string"
+              },
+              {
+                "const": "region-21",
+                "type": "string"
+              },
+              {
+                "const": "region-22",
+                "type": "string"
+              },
+              {
+                "const": "region-23",
+                "type": "string"
+              },
+              {
+                "const": "region-24",
+                "type": "string"
+              },
+              {
+                "const": "region-25",
+                "type": "string"
+              },
+              {
+                "const": "region-26",
+                "type": "string"
+              },
+              {
+                "const": "region-27",
+                "type": "string"
+              },
+              {
+                "const": "region-28",
+                "type": "string"
+              },
+              {
+                "const": "region-29",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "region"
+        ]
+      },
+      "measuredTokens": 200
+    },
+    {
+      "name": "enum40",
+      "description": "Synthetic structure-heavy test tool.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "country": {
+            "type": "string",
+            "enum": [
+              "C00",
+              "C01",
+              "C02",
+              "C03",
+              "C04",
+              "C05",
+              "C06",
+              "C07",
+              "C08",
+              "C09",
+              "C10",
+              "C11",
+              "C12",
+              "C13",
+              "C14",
+              "C15",
+              "C16",
+              "C17",
+              "C18",
+              "C19",
+              "C20",
+              "C21",
+              "C22",
+              "C23",
+              "C24",
+              "C25",
+              "C26",
+              "C27",
+              "C28",
+              "C29",
+              "C30",
+              "C31",
+              "C32",
+              "C33",
+              "C34",
+              "C35",
+              "C36",
+              "C37",
+              "C38",
+              "C39"
+            ],
+            "description": "Country code"
+          }
+        },
+        "required": []
+      },
+      "measuredTokens": 222
+    },
+    {
+      "name": "nullable20",
+      "description": "Synthetic structure-heavy test tool.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "flag_0": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_1": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_2": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_3": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_4": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_5": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_6": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_7": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_8": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_9": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_10": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_11": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_12": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_13": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_14": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_15": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_16": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_17": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_18": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_19": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": []
+      },
+      "measuredTokens": 177
+    },
+    {
+      "name": "defaults",
+      "description": "Synthetic structure-heavy test tool.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "default": 20,
+            "minimum": 1,
+            "maximum": 100
+          },
+          "sort": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "asc"
+          },
+          "verbose": {
+            "type": "boolean",
+            "default": false
+          },
+          "label": {
+            "type": "string",
+            "default": "untitled"
+          }
+        },
+        "required": []
+      },
+      "measuredTokens": 72
+    },
+    {
+      "name": "nested_deep",
+      "description": "Synthetic structure-heavy test tool.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "object",
+            "properties": {
+              "b": {
+                "type": "object",
+                "properties": {
+                  "c": {
+                    "type": "object",
+                    "properties": {
+                      "d": {
+                        "type": "object",
+                        "properties": {
+                          "e": {
+                            "type": "string",
+                            "description": "leaf"
+                          }
+                        },
+                        "required": []
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": []
+              }
+            },
+            "required": []
+          }
+        },
+        "required": []
+      },
+      "measuredTokens": 41
+    },
+    {
+      "name": "refs",
+      "description": "Synthetic structure-heavy test tool.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "$ref": "#/$defs/Point"
+          },
+          "b": {
+            "$ref": "#/$defs/Point"
+          },
+          "poly": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Point"
+            }
+          }
+        },
+        "$defs": {
+          "Point": {
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "x",
+              "y"
+            ]
+          }
+        }
+      },
+      "measuredTokens": 51
+    },
+    {
+      "name": "constraints",
+      "description": "Synthetic structure-heavy test tool.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "pattern": "^[^@]+@[^@]+$",
+            "minLength": 3,
+            "maxLength": 254
+          },
+          "age": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 150,
+            "multipleOf": 1
+          },
+          "score": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        },
+        "required": []
+      },
+      "measuredTokens": 84
     }
   ]
 }

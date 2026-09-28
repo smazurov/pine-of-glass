@@ -1,6 +1,6 @@
 // Provider tool payload formats and token estimators shared by the family.
 
-import { isJsonObject } from "./boundary.ts";
+import { isJsonObject, type JsonFields } from "./boundary.ts";
 import { estimateCharsAsTokens, type HeuristicNumbers } from "./heuristics.ts";
 
 /** The slice of a tool definition the estimators need; contextimate's ToolSummary
@@ -154,31 +154,99 @@ export function toolPayloadLabel(format: string): string {
   }
 }
 
-// --- OpenAI tool formula ------------------------------------------------------------------
+// --- OpenAI tool render -------------------------------------------------------------------
 
-// OpenAI renders each function as a TypeScript-style declaration, which drops most of its
-// JSON envelope. Live counts of 179 tools fit these constants; see docs/pi-contextimate.md.
-const OPENAI_TOOL_ENVELOPE_CHARS = 190;
-const OPENAI_SMALL_TOOL_DENOMINATOR = 8;
+// OpenAI shows the model each function as a TypeScript-style declaration rather than JSON,
+// then adds 16 tokens once for the tool block. renderOpenAITool reproduces that text; see
+// docs/pi-contextimate.md for the provider counts it was checked against.
 const OPENAI_TOOL_BLOCK_TOKENS = 16;
+const RENDERED_KEYWORDS = new Set([
+  "type", "description", "properties", "required", "items", "enum", "const", "anyOf", "oneOf",
+  "default", "title", "examples", "nullable", "deprecated", "$ref", "$schema", "$defs", "definitions",
+]);
 
-export function estimateOpenAIToolDefinitionTokens(tool: ToolDefinition, denominator: number): number {
-  const chars = safeMinifiedJson(openAIResponsesToolPayload(tool)).length;
-  return Math.ceil(Math.max(chars / OPENAI_SMALL_TOOL_DENOMINATOR, (chars - OPENAI_TOOL_ENVELOPE_CHARS) / denominator));
+// o200k_base's pre-tokenizer split. Each piece is about one token, plus one per 9 characters.
+const O200K_PIECES = /[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+/gu;
+const O200K_CHARS_PER_EXTRA_TOKEN = 9;
+
+export function countO200kTokens(text: string): number {
+  let tokens = 0;
+  for (const [piece] of text.matchAll(O200K_PIECES)) tokens += 1 + Math.floor((piece.length - 1) / O200K_CHARS_PER_EXTRA_TOKEN);
+  return tokens;
 }
 
-export function estimateOpenAIFunctionToolTokens(tools: ToolDefinition[], denominator: number): number {
-  return tools.reduce((sum, tool) => sum + estimateOpenAIToolDefinitionTokens(tool, denominator), OPENAI_TOOL_BLOCK_TOKENS);
+function renderComment(text: string): string {
+  return text.split("\n").map((line) => `// ${line}\n`).join("");
 }
 
-/** Total estimated tokens for a tool list under a family heuristic: the cookbook
- * formula where it applies, the payload char ratio everywhere else. */
+function renderType(schema: unknown, defs: JsonFields, seen: string[]): string {
+  if (!isJsonObject(schema) || Object.keys(schema).length === 0) return "any";
+  if (typeof schema.$ref === "string") {
+    const target = defs[schema.$ref.split("/").at(-1)!];
+    return target === undefined || seen.includes(schema.$ref) ? "any" : renderType(target, defs, [...seen, schema.$ref]);
+  }
+  const variants = Array.isArray(schema.anyOf) ? schema.anyOf : Array.isArray(schema.oneOf) ? schema.oneOf : undefined;
+  if (variants) {
+    return variants.map((variant) => renderType(variant, defs, seen)
+      + (isJsonObject(variant) && typeof variant.description === "string" ? ` // ${variant.description}\n` : "")).join(" | ");
+  }
+  if (Array.isArray(schema.enum)) return schema.enum.map((value) => JSON.stringify(value)).join(" | ");
+  if ("const" in schema) return JSON.stringify(schema.const);
+  if (Array.isArray(schema.type)) return schema.type.map((type) => (type === "integer" ? "number" : String(type))).join(" | ");
+  if (schema.type === "object" || (schema.type === undefined && "properties" in schema)) return renderObject(schema, defs, seen);
+  if (schema.type === "array") {
+    const items = isJsonObject(schema.items) ? renderType(schema.items, defs, seen) : "any";
+    return items.includes(" | ") ? `Array<${items}>` : `${items}[]`;
+  }
+  if (schema.type === "integer") return "number";
+  return schema.type === "string" || schema.type === "number" || schema.type === "boolean" || schema.type === "null" ? schema.type : "any";
+}
+
+function renderObject(schema: JsonFields, defs: JsonFields, seen: string[]): string {
+  const properties = Object.entries(getSchemaProperties(schema));
+  if (properties.length === 0) return "object";
+  const required = new Set(getSchemaRequired(schema));
+  let out = "{\n";
+  for (const [name, value] of properties) {
+    const property = isJsonObject(value) ? value : {};
+    if (typeof property.title === "string") out += `// ${property.title}\n//\n`;
+    if (typeof property.description === "string" && property.description) out += renderComment(property.description);
+    if (Array.isArray(property.examples) && property.examples.length > 0) {
+      out += `// Examples:\n${property.examples.map((example) => `// - ${JSON.stringify(example)}\n`).join("")}`;
+    }
+    // The provider keeps keywords it has no TypeScript form for, such as format or minimum.
+    const unrendered = Object.entries(property).filter(([key]) => !RENDERED_KEYWORDS.has(key));
+    out += `${name}${required.has(name) ? "" : "?"}: ${renderType(property, defs, seen)}${property.nullable === true ? " | null" : ""},`
+      + ("default" in property ? ` // default: ${JSON.stringify(property.default)}` : "")
+      + (unrendered.length > 0 ? ` // ${JSON.stringify(Object.fromEntries(unrendered))}` : "")
+      + "\n";
+  }
+  return `${out}}`;
+}
+
+export function renderOpenAITool(tool: ToolDefinition): string {
+  const schema = isJsonObject(tool.schema) ? tool.schema : {};
+  const defs = isJsonObject(schema.$defs) ? schema.$defs : isJsonObject(schema.definitions) ? schema.definitions : {};
+  const parameters = Object.keys(getSchemaProperties(schema)).length > 0 ? `_: ${renderObject(schema, defs, [])}` : "";
+  return `${tool.description ? renderComment(tool.description) : ""}type ${tool.name} = (${parameters}) => any;\n\n`;
+}
+
+export function estimateOpenAIToolDefinitionTokens(tool: ToolDefinition): number {
+  return countO200kTokens(renderOpenAITool(tool));
+}
+
+export function estimateOpenAIFunctionToolTokens(tools: ToolDefinition[]): number {
+  return tools.reduce((sum, tool) => sum + estimateOpenAIToolDefinitionTokens(tool), OPENAI_TOOL_BLOCK_TOKENS);
+}
+
+/** Total estimated tokens for a tool list under a family heuristic: the OpenAI render
+ * where it applies, the payload char ratio everywhere else. */
 export function estimateToolListTokens(
   tools: Array<ToolDefinition & { promptGuidelines?: string[] }>,
   heuristic: Pick<HeuristicNumbers, "toolNumerator" | "toolDenominator">,
 ): number {
   if (tools.length === 0) return 0;
-  if (heuristic.toolNumerator === "openai-cookbook") return estimateOpenAIFunctionToolTokens(tools, heuristic.toolDenominator);
+  if (heuristic.toolNumerator === "openai-cookbook") return estimateOpenAIFunctionToolTokens(tools);
   const content = safeMinifiedJson(aggregateToolPayload(tools, heuristic.toolNumerator));
   return estimateCharsAsTokens(content.length, heuristic.toolDenominator);
 }
