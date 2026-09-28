@@ -60,27 +60,29 @@ These profiles cover visible text only. Dynamic aliases and unverified variants 
 
 OpenAI does not send tool JSON to the model as-is. It renders each function as a TypeScript-style declaration, which keeps names, descriptions and types but drops most of the JSON syntax. Its [token-counting docs](https://developers.openai.com/api/docs/guides/token-counting) recommend the count endpoint for tools, but that needs an API key and a network call at startup, and Codex OAuth has no count endpoint.
 
-Contextimate therefore estimates each OpenAI tool from its Responses payload (`openai-cookbook`, a name kept for config compatibility):
+Contextimate therefore estimates each OpenAI tool locally in two steps (`openai-cookbook`, a name kept for config compatibility):
+
+1. **Render.** It writes the tool as OpenAI does: descriptions become `//` comments, properties become `name?: type,` lines, `enum`, `const`, `anyOf` and `oneOf` become unions, local `$ref`s are inlined, and defaults, titles and examples become comments. The provider also keeps keywords that have no TypeScript form, such as `format`, `pattern` or `minimum`, so the render appends them as a JSON comment.
+2. **Count.** It splits the render with the `o200k_base` pre-tokenizer pattern, counting each piece as one token plus one per 9 characters. On the rendered text this is within about 3% of the real tokenizer, with no vocabulary to ship.
+
+The tools total adds a fixed 16 tokens for the tool block.
+
+The render rules come from OpenAI's open-source [Harmony renderer](https://github.com/openai/harmony/blob/main/src/encoding.rs) and 41 single-feature live probes. The estimator was checked on 28 September 2026 against 424 tools, each sent alone through Codex, where the prompt minus a no-tool baseline gives its exact cost. The set covered 21 Pi and extension tools, all 368 MCP tools in the local cache (22 servers), and 35 synthetic schemas that are mostly structure: long option lists, nullable fields, `$ref`, nested arrays and constraints. Counts were identical on GPT-5.5, GPT-5.6 and GPT-6, and tool costs add exactly.
 
 ```text
-tool tokens = max(chars ÷ 8, (chars − 190) ÷ 4.5)
-tools total = 16 + the sum of tool tokens
+method                                 realistic tool sets     single tools     structure-heavy
+                                       median (p90) error      median error     single, median
+cookbook-style formula (before #132)   34.6% (49.9%)
+max(chars ÷ 8, (chars − 190) ÷ 4.5)     4.5% (15.1%)            9%               19%
+render + o200k piece count              2.3% (7.7%)             3%                7%
+render + exact o200k_base (ceiling)     1.5% (6.4%)             1%                2%
 ```
 
-The 190 characters are roughly the JSON envelope the render drops, and ÷ 8 keeps very small tools from rounding to nothing. The constants come from live counts on 28 September 2026. Each of 179 real tools (21 Pi and extension tools plus 158 MCP tools from 22 servers) was sent alone, and the prompt minus a no-tool baseline gave its exact cost. The tool block adds exactly 16 tokens once. Counts were identical on GPT-5.5, GPT-5.6 and GPT-6, and a sample of tools counted exactly under a local render of that TypeScript form.
+Realistic tool sets are random draws of 10 to 40 real tools. The piece-count constant (9) was chosen on the MCP tools alone. The largest remaining misses are a few very large MCP schemas, schema-valued `additionalProperties` and `allOf`; these appear only 9 times across the 389 real tools.
 
-```text
-method                                random 10–40-tool sets, median (p90) error
-previous cookbook-style formula       34.6% (49.9%)
-raw minified chars ÷ 5.5              7.2% (12.0%)
-max(chars ÷ 8, (chars − 190) ÷ 4.5)   1.9% (4.7%)
-```
+Claude tool payloads measured near their text divisors (÷ 3.36 on Claude 4.5/4.6, ÷ 2.5 on the Claude 4.7+ family), so they use divisors of 3.3 and 2.6. Direct OpenAI Responses and Azure routes use the same OpenAI render as Codex; they were not probed separately. Models that merely share Anthropic, OpenAI Chat or Responses wire formats use the matching payload shape with the fallback ÷ 4, not the upstream tokenizer. Unmeasured Gemini and Bedrock tool payloads also use ÷ 4.
 
-Fitted on the 158 MCP tools alone, the formula was within 3% on the 21 held-out extension tools. Single tools vary more (median error 7%): deeply nested schemas such as `edit` come out high.
-
-Claude tool payloads measured near their text divisors (÷ 3.36 on Claude 4.5/4.6, ÷ 2.5 on the Claude 4.7+ family), so they use divisors of 3.3 and 2.6. Direct OpenAI Responses and Azure routes use the same OpenAI formula as Codex; they were not probed separately. Models that merely share Anthropic, OpenAI Chat or Responses wire formats use the matching payload shape with the fallback ÷ 4, not the upstream tokenizer. Unmeasured Gemini and Bedrock tool payloads also use ÷ 4.
-
-In the UI, a formula-counted tools row says `÷ 4.5 · OpenAI formula`: its character count is the Responses payload before each tool's envelope allowance. Divisor-counted rows say things like `÷ 2.6 · Anthropic tool payload`. Each tool's own row is counted on that tool's own shaped payload or formula subtotal, and the schema tree is just the readable rendering of it.
+In the UI, a render-counted tools row says `· OpenAI tool render`, and its character count is the rendered text. Divisor-counted rows say things like `÷ 2.6 · Anthropic tool payload`. Each tool's own row is counted on that tool's own shaped payload or render, and the schema tree is just the readable rendering of it.
 
 ## Session rows and the total
 
@@ -178,7 +180,7 @@ Later files override scalar fields, `profiles` merge by name, and `rules` append
 
 `toolNumerator` picks the payload format to count:
 
-- `openai-cookbook`: the OpenAI formula above, with `toolDenominator` as its divisor (the OpenAI default; the name is kept for config compatibility)
+- `openai-cookbook`: the OpenAI render above, which ignores `toolDenominator` (the OpenAI default; the name is kept for config compatibility)
 - `openai-responses` / `openai-codex-responses`: Responses-style function objects
 - `openai-chat` / `openai-completions` / `mistral`: Chat Completions-style `{ type, function }` objects
 - `anthropic`: `{ name, description, input_schema }`

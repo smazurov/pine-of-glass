@@ -21,7 +21,7 @@ import {
   estimateOpenAIToolDefinitionTokens,
   getSchemaProperties,
   getSchemaRequired,
-  openAIResponsesToolPayload,
+  renderOpenAITool,
   safeMinifiedJson,
   schemaArrayItemProperties,
   schemaPropertyDescription,
@@ -145,7 +145,7 @@ type ToolNumeratorResult = {
   label: string;
   content: string;
   chars: number;
-  /** Present only for the openai-cookbook formula; ratio numerators divide chars instead. */
+  /** Present only for the OpenAI tool render; ratio numerators divide chars instead. */
   tokens?: number;
 };
 
@@ -472,12 +472,12 @@ function resolveHeuristic(model: ModelSummary | undefined, config: ContextimateC
 function buildToolNumerator(tools: ToolSummary[], heuristic: ResolvedHeuristic): ToolNumeratorResult {
   const numerator = heuristic.toolNumerator;
   if (numerator === "openai-cookbook") {
-    const content = safeMinifiedJson(tools.map(openAIResponsesToolPayload));
+    const content = tools.map(renderOpenAITool).join("");
     return {
-      label: "OpenAI-style local formula",
+      label: "OpenAI tool render",
       content,
       chars: content.length,
-      tokens: estimateOpenAIFunctionToolTokens(tools, heuristic.toolDenominator),
+      tokens: estimateOpenAIFunctionToolTokens(tools),
     };
   }
   const content = safeMinifiedJson(aggregateToolPayload(tools, numerator));
@@ -524,10 +524,10 @@ function buildToolFields(schema: unknown): ToolField[] {
 
 function buildToolDisplayEstimate(tool: ToolSummary, heuristic: ResolvedHeuristic): ToolDisplayEstimate {
   const numerator = heuristic.toolNumerator;
-  const chars = safeMinifiedJson(toolPayload(tool, numerator)).length;
   if (numerator === "openai-cookbook") {
-    return { tokens: estimateOpenAIToolDefinitionTokens(tool, heuristic.toolDenominator), chars };
+    return { tokens: estimateOpenAIToolDefinitionTokens(tool), chars: renderOpenAITool(tool).length };
   }
+  const chars = safeMinifiedJson(toolPayload(tool, numerator)).length;
   return { tokens: estimateCharsAsTokens(chars, heuristic.toolDenominator), chars };
 }
 
@@ -546,7 +546,7 @@ function buildToolsSection(pi: ExtensionAPI, heuristic: ResolvedHeuristic): { se
   const denominator = heuristic.toolDenominator;
   const effectiveTokens = numerator.tokens ?? estimateCharsAsTokens(numerator.chars, denominator);
   const sectionDetail = typeof numerator.tokens === "number"
-    ? `${ratioDetail(denominator)} · OpenAI formula`
+    ? "· OpenAI tool render"
     : `${ratioDetail(denominator)} · ${numerator.label}`;
   const toolEstimates = tools.map((tool) => ({ tool, estimate: buildToolDisplayEstimate(tool, heuristic) }));
   const sortedEstimates = [...toolEstimates].sort((a, b) => b.estimate.tokens - a.estimate.tokens || a.tool.name.localeCompare(b.tool.name));
@@ -563,8 +563,7 @@ function buildToolsSection(pi: ExtensionAPI, heuristic: ResolvedHeuristic): { se
   }));
   const notes = typeof numerator.tokens === "number"
     ? [
-        "formula  +7/fn +3/prop-section +3/prop -3/enum +3/enum-item +12 once · nested counted recursively",
-        `counted on the minified provider payload (${compactCount(numerator.chars)} ch); tree below is the readable view of it`,
+        `counted on OpenAI's TypeScript-style tool render (${compactCount(numerator.chars)} ch) with an o200k_base approximation, plus 16 once`,
       ]
     : [
         `counts use ${numerator.label} at ch ${ratioDetail(denominator)} over the minified provider payload (${compactCount(numerator.chars)} ch); the tree below is the readable view`,
@@ -691,7 +690,7 @@ function methodologyHint(heuristic: ResolvedHeuristic): string {
     ? `${SEP}session ${ratioDetail(heuristic.sessionDenominator)}`
     : "";
   const toolsPart = heuristic.toolNumerator === "openai-cookbook"
-    ? `${SEP}tools: OpenAI formula`
+    ? `${SEP}tools: OpenAI render`
     : heuristic.toolDenominator !== heuristic.textDenominator
       ? `${SEP}tools ${ratioDetail(heuristic.toolDenominator)}`
       : "";
@@ -1303,7 +1302,7 @@ export const internals = {
   // provider payload formats
   buildToolNumerator,
   buildToolDisplayEstimate,
-  // OpenAI cookbook-style formula
+  // OpenAI tool render
   estimateOpenAIToolDefinitionTokens,
   estimateOpenAIFunctionToolTokens,
   // session accounting

@@ -273,7 +273,7 @@ test("methodology states session/tool methods only when they deviate from the te
   // Formula-counted tools are not a ch ratio at all — the hint must not pretend they are.
   assert.equal(
     methodologyHint(heuristic({ label: "OpenAI-Codex heuristic", textDenominator: 4, sessionDenominator: 4, toolDenominator: 5.5, toolNumerator: "openai-cookbook" })),
-    "counts ch ÷ 4 · tools: OpenAI formula (OpenAI-Codex heuristic)",
+    "counts ch ÷ 4 · tools: OpenAI render (OpenAI-Codex heuristic)",
   );
 });
 

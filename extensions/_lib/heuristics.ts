@@ -194,7 +194,7 @@ function tokenizerProfile(model: ModelSummary): TokenizerProfile | undefined {
 function toolProfile(model: ModelSummary): ToolProfile | undefined {
   const provider = model.provider.toLowerCase();
   const api = model.api.toLowerCase();
-  if (provider.includes("openai-codex")) return { toolDenominator: 4.5, toolNumerator: "openai-cookbook" };
+  if (provider.includes("openai-codex")) return { toolDenominator: 5.5, toolNumerator: "openai-cookbook" };
   if (api === "anthropic-messages") {
     let denominator = 4;
     if (isClaudeModel(model)) denominator = CLAUDE_47_PLUS_MODEL.test(model.id.toLowerCase()) ? 2.6 : 3.3;
@@ -208,7 +208,7 @@ function toolProfile(model: ModelSummary): ToolProfile | undefined {
   if (api === "pi-messages") return { toolDenominator: 4, toolNumerator: "pi-messages" };
   if (api === "openai-responses" || api === "azure-openai-responses") {
     return provider.includes("openai")
-      ? { toolDenominator: 4.5, toolNumerator: "openai-cookbook" }
+      ? { toolDenominator: 5.5, toolNumerator: "openai-cookbook" }
       : { toolDenominator: 4, toolNumerator: "openai-responses" };
   }
   return undefined;
