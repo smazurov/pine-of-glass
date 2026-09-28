@@ -107,6 +107,8 @@ export const fixtureSession: SessionBreakdown = {
   messageChars: 8120,
   messageCount: 14,
   contextUsageEstimated: false,
+  measuredToolOutputTokens: 0,
+  measuredToolOutputChars: 0,
 };
 
 // Hand-written system prompt matching the format the contract suite proves pi emits.

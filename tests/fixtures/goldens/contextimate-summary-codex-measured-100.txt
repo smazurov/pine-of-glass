@@ -1,0 +1,19 @@
+
+[Contextimate] summary → compact → expanded
+  <expand-key>: cycle view · model openai-codex/gpt-5.5 · counts ch ÷ 4 · tools: OpenAI formula (OpenAI-Codex heuristic)
+
+  ▸ Runtime system prompt                    ~0.1k tokens (0.2k ch)
+  ▸ Global AGENTS.md                         ~0.0k tokens (0.1k ch)
+  ▸ ~/projects/demo/AGENTS.md                ~0.0k tokens (0.1k ch)
+  ▸ Skill frontmatter (3)                    ~0.2k tokens (0.9k ch)
+  ▸ Tools (3/4 active)                       ~0.2k tokens (1.3k ch)
+  Total harness                              ~1.6k tokens (measured · rows ~0.5k · ~1% ctx)
+
+  Tool outputs                              ~33.2k tokens (52.3k ch · 78% measured)
+  Messages                                   ~2.0k tokens (8.1k ch)
+  Thinking summaries                         ~0.3k tokens (1.2k ch)
+  Reasoning context                          12.0k tokens (provider)
+  Unattributed                              ~15.1k tokens (accounting gap)
+  Total session                             ~62.7k tokens (~31% ctx · Pi-based)
+  Total request                              64.3k tokens (32.2% / 200k ctx)
+  █████████▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒  harness ~1.6k · session ~62.7k · free 135.7k

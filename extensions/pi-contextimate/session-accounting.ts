@@ -19,6 +19,13 @@ export type SessionBreakdown = {
   messageCount: number;
   /** Pi's current total includes a local estimate after the last trusted assistant usage. */
   contextUsageEstimated: boolean;
+  /** Provider-measured prompt growth attributed to tool results, in the anchor model's tokens. */
+  measuredToolOutputTokens: number;
+  /** Characters of the tool results that `measuredToolOutputTokens` covers. */
+  measuredToolOutputChars: number;
+  /** The first request's exact prompt, present only while the cache proves every later
+   * request up to the anchor reused it unchanged. */
+  firstPrompt?: { tokens: number; preludeChars: number };
 };
 
 export type SessionScan = {
@@ -30,6 +37,8 @@ export type SessionScan = {
 export type SessionEstimate = {
   totalTokens: number;
   totalSource: "pi" | "heuristic";
+  harnessTokens: number;
+  harnessSource: "measured" | "estimate";
   toolOutputTokens: number;
   messageTokens: number;
   thinkingSummaryTokens: number;
@@ -38,24 +47,33 @@ export type SessionEstimate = {
   denominator: number;
 };
 
+// A first message larger than this makes the harness measurement mostly estimate.
+const MAX_PRELUDE_TOKENS = 4096; // agent-default (not a user rule): 2026-09-28
+
 export function estimateSessionBreakdown(
   session: SessionBreakdown,
   options: { denominator: number; harnessTokens: number; contextTokens?: number | null },
 ): SessionEstimate {
   const estimate = (chars: number) => Math.ceil(chars / options.denominator);
-  const toolOutputTokens = estimate(session.toolOutputChars);
+  const unmeasuredToolChars = Math.max(0, session.toolOutputChars - session.measuredToolOutputChars);
+  const toolOutputTokens = session.measuredToolOutputTokens + estimate(unmeasuredToolChars);
   const messageTokens = estimate(session.messageChars);
   const thinkingSummaryTokens = estimate(session.thinkingSummaryChars);
   const attributedTokens = toolOutputTokens + messageTokens + thinkingSummaryTokens + (session.reasoningTokens ?? 0);
-  const heuristicTotal = estimate(session.toolOutputChars + session.messageChars + session.thinkingSummaryChars)
-    + (session.reasoningTokens ?? 0);
+  const preludeTokens = estimate(session.firstPrompt?.preludeChars ?? 0);
+  const measuredHarness = session.firstPrompt && preludeTokens <= MAX_PRELUDE_TOKENS
+    ? session.firstPrompt.tokens - preludeTokens
+    : undefined;
+  const harnessTokens = measuredHarness ?? options.harnessTokens;
   const piTotal = options.contextTokens === null || options.contextTokens === undefined
     ? undefined
-    : Math.max(0, Math.round(options.contextTokens - options.harnessTokens));
-  const totalTokens = piTotal ?? heuristicTotal;
+    : Math.max(0, Math.round(options.contextTokens - harnessTokens));
+  const totalTokens = piTotal ?? attributedTokens;
   return {
     totalTokens,
     totalSource: piTotal === undefined ? "heuristic" : "pi",
+    harnessTokens,
+    harnessSource: measuredHarness === undefined ? "estimate" : "measured",
     toolOutputTokens,
     messageTokens,
     thinkingSummaryTokens,
@@ -112,6 +130,18 @@ function sameModel(left: AssistantMessage, right: AssistantMessage): boolean {
   return left.provider === right.provider && left.api === right.api && left.model === right.model;
 }
 
+// Codex caches in blocks, so a reused prompt's cache read can stop a few hundred tokens short.
+const CACHE_PREFIX_SLACK_TOKENS = 2048; // agent-default (not a user rule): 2026-09-28
+
+function promptTokens(message: AssistantMessage): number {
+  const usage = message.usage;
+  return Math.max(usage.input + usage.cacheRead + usage.cacheWrite, usage.totalTokens - usage.output, 0);
+}
+
+function reusedPrompt(previous: AssistantMessage, next: AssistantMessage): boolean {
+  return promptTokens(previous) - next.usage.cacheRead <= CACHE_PREFIX_SLACK_TOKENS;
+}
+
 function hasEncryptedOpenAIReasoning(signature: string | undefined): boolean {
   if (!signature) return false;
   try {
@@ -147,16 +177,13 @@ export function scanSession(sessionManager?: SessionSource): SessionScan {
       messageChars: 0,
       messageCount: messages.length,
       contextUsageEstimated: true,
+      measuredToolOutputTokens: 0,
+      measuredToolOutputChars: 0,
     };
-    const trustedAssistantIndices: number[] = [];
-    let lastTrustedUsageIndex = -1;
-    for (let index = 0; index < llmMessages.length; index++) {
-      const message = llmMessages[index]!;
-      if (message.role === "assistant" && hasTrustedUsage(message)) {
-        trustedAssistantIndices.push(index);
-        lastTrustedUsageIndex = index;
-      }
-    }
+    const trusted = llmMessages.flatMap((message, index) =>
+      message.role === "assistant" && hasTrustedUsage(message) ? [{ index, message }] : []);
+    const lastTrustedUsageIndex = trusted.at(-1)?.index ?? -1;
+    const anchor = trusted.at(-1)?.message;
     let lastTrustedContextIndex = -1;
     for (let index = 0; index < messages.length; index++) {
       const message = messages[index]!;
@@ -172,8 +199,7 @@ export function scanSession(sessionManager?: SessionSource): SessionScan {
     let exactReasoningTokens = 0;
     let historicalReasoningTokens = 0;
     let hasExactReasoning = false;
-    const anchor = llmMessages[lastTrustedUsageIndex];
-    if (anchor?.role === "assistant") {
+    if (anchor) {
       let turnStart = 0;
       for (let index = 0; index < lastTrustedUsageIndex; index++) {
         if (llmMessages[index]!.role === "user") turnStart = index + 1;
@@ -186,9 +212,8 @@ export function scanSession(sessionManager?: SessionSource): SessionScan {
         : anchorIsOpenAI && keepsAllOpenAIReasoning(anchor.model);
       const keepsCurrentTurn = anchorIsClaude || anchorIsOpenAI;
       const historyStart = keepsRetainedHistory ? 0 : keepsCurrentTurn ? turnStart : lastTrustedUsageIndex;
-      for (const index of trustedAssistantIndices) {
-        const message = llmMessages[index]!;
-        if (message.role !== "assistant" || !sameModel(message, anchor)) continue;
+      for (const { index, message } of trusted) {
+        if (!sameModel(message, anchor)) continue;
         if (index < historyStart) {
           if (anchorIsClaude) strippedThinkingIndices.add(index);
           continue;
@@ -204,9 +229,7 @@ export function scanSession(sessionManager?: SessionSource): SessionScan {
           historicalReasoningIndices.add(index);
         }
       }
-      const promptBuckets = anchor.usage.input + anchor.usage.cacheRead + anchor.usage.cacheWrite;
-      const reportedPromptTokens = Math.max(promptBuckets, anchor.usage.totalTokens - anchor.usage.output, 0);
-      if (historicalReasoningTokens > reportedPromptTokens) {
+      if (historicalReasoningTokens > promptTokens(anchor)) {
         exactReasoningTokens -= historicalReasoningTokens;
         for (const index of historicalReasoningIndices) exactReasoningIndices.delete(index);
         hasExactReasoning = exactReasoningIndices.size > 0;
@@ -214,8 +237,31 @@ export function scanSession(sessionManager?: SessionSource): SessionScan {
     }
     if (hasExactReasoning) breakdown.reasoningTokens = exactReasoningTokens;
 
+    // A reused prompt grew by exactly the replayed response plus what was appended after it.
+    for (const [k, next] of trusted.slice(1).entries()) {
+      const previous = trusted[k]!.message;
+      const appended = llmMessages.slice(trusted[k]!.index + 1, next.index);
+      const replayed = previous.usage.output - (hasReasoningCarrier(previous) ? 0 : reportedReasoning(previous) ?? 0);
+      const measured = promptTokens(next.message) - promptTokens(previous) - replayed;
+      if (!sameModel(previous, anchor!) || !reusedPrompt(previous, next.message) || measured < 0
+        || appended.some((message) => message.role !== "toolResult")) continue;
+      breakdown.measuredToolOutputTokens += measured;
+      breakdown.measuredToolOutputChars += appended.reduce((sum, message) => sum + countTextContent(message.content), 0);
+    }
+
+    // The first prompt is harness plus prelude, and still the anchor's harness while every later request reused it.
+    const firstPromptHolds = !messages.some((message) => message.role === "compactionSummary")
+      && trusted.every(({ message }, k) => sameModel(message, anchor!) && (k === 0 || reusedPrompt(trusted[k - 1]!.message, message)));
+    const firstPromptIndex = firstPromptHolds ? trusted[0]?.index : undefined;
+
     for (let index = 0; index < llmMessages.length; index++) {
       const message = llmMessages[index]!;
+      if (index === firstPromptIndex) {
+        breakdown.firstPrompt = {
+          tokens: promptTokens(trusted[0]!.message),
+          preludeChars: breakdown.toolOutputChars + breakdown.messageChars + breakdown.thinkingSummaryChars,
+        };
+      }
       if (message.role === "toolResult") {
         breakdown.toolOutputChars += countTextContent(message.content);
         continue;
@@ -229,7 +275,7 @@ export function scanSession(sessionManager?: SessionSource): SessionScan {
             const claudeSummary = message.api === "anthropic-messages"
               || message.model.toLowerCase().includes("claude");
             const plainSummary = !block.thinkingSignature;
-            const crossModelSummary = anchor?.role === "assistant" && !sameModel(message, anchor);
+            const crossModelSummary = anchor !== undefined && !sameModel(message, anchor);
             if (!strippedThinkingIndices.has(index) && !exactReasoningIndices.has(index)
               && !block.redacted && (claudeSummary || plainSummary || crossModelSummary)) {
               breakdown.thinkingSummaryChars += (block.thinking ?? "").length;
@@ -248,7 +294,7 @@ export function scanSession(sessionManager?: SessionSource): SessionScan {
     // Pi estimates every raw context message after the last trusted usage, including
     // `!!` bash messages that convertToLlm deliberately omits from provider context.
     breakdown.contextUsageEstimated = lastTrustedContextIndex !== messages.length - 1;
-    const lastBilled = anchor?.role === "assistant"
+    const lastBilled = anchor
       && typeof anchor.provider === "string"
       && typeof anchor.model === "string"
       && typeof anchor.api === "string"

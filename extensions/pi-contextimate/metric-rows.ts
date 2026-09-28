@@ -1,8 +1,10 @@
 // Metric rows: the label / token column / dim detail grammar shared by every
-// Contextimate view, and the token label layout that keeps magnitudes aligned.
+// Contextimate view, the token label layout that keeps magnitudes aligned, and the
+// count details those rows carry.
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { compactCount } from "../_lib/fmt.ts";
+import { estimateCharsAsTokens } from "../_lib/heuristics.ts";
 import { ELLIPSIS, GLYPH, ink } from "../_lib/style.ts";
 
 export type TokenLabelLayout = { unitWidth: number; fieldWidth: number };
@@ -92,4 +94,32 @@ export function renderMetricRow(row: MetricRow, theme: Theme, layout: MetricLayo
   const indent = " ".repeat(2 + layout.labelWidth);
   const detailLines = wrapTextWithAnsi(row.detail, Math.max(1, layout.width - indent.length));
   return [line, ...detailLines.map((detail) => `${indent}${theme.fg("dim", detail)}`)];
+}
+
+export function formatPercent(value: number | null): string | undefined {
+  if (value === null || !Number.isFinite(value)) return undefined;
+  return `${value.toFixed(1)}%`;
+}
+
+// Denominators are sanitized once, at heuristic resolution (applyHeuristicPatch); by
+// the time one reaches a count it is a trusted positive number. The shared estimator
+// slice (denominators, payload formats, the OpenAI tool formula) lives in
+// _lib/heuristics.ts so cachemire's model-switch forecast uses the same numbers.
+
+export function formatDenominator(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+// --- the family number grammar: `~0.5k tokens (1.2k ch ÷ 2.6)` -------------------------
+
+export function ratioDetail(denominator: number): string {
+  return `÷ ${formatDenominator(denominator)}`;
+}
+
+export function countDetail(chars: number, detail?: string): string {
+  return `(${compactCount(chars)} ch${detail ? ` ${detail}` : ""})`;
+}
+
+export function inlineCount(chars: number, denominator: number): string {
+  return `~${compactCount(estimateCharsAsTokens(chars, denominator))} tokens ${countDetail(chars, ratioDetail(denominator))}`;
 }

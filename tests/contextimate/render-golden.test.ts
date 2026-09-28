@@ -61,6 +61,17 @@ test("summary view goldens at 80 and 120 columns", () => {
   expectGolden("contextimate-summary-codex-100.txt", rendered(renderSummary(fixtureSnapshot(codexModel), plainTheme, 100)));
 });
 
+test("summary view names measured tool outputs and a measured harness", () => {
+  const snapshot = fixtureSnapshot(codexModel);
+  snapshot.session = {
+    ...snapshot.session!,
+    measuredToolOutputTokens: 30_450,
+    measuredToolOutputChars: 41_200,
+    firstPrompt: { tokens: 1_630, preludeChars: 48 },
+  };
+  expectGolden("contextimate-summary-codex-measured-100.txt", rendered(renderSummary(snapshot, plainTheme, 100)));
+});
+
 test("summary view keeps its token column at narrow widths", () => {
   const snapshot = fixtureSnapshot(codexModel);
   expectGolden("contextimate-summary-codex-64.txt", rendered(renderSummary(snapshot, plainTheme, 64)));
