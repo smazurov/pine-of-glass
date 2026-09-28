@@ -30,7 +30,18 @@ import {
   toolPayload,
   toolPayloadLabel,
 } from "../_lib/tool-payloads.ts";
-import { ELLIPSIS, GLYPH, SEP, ink, panelHeader } from "../_lib/style.ts";
+import { GLYPH, SEP, ink, panelHeader } from "../_lib/style.ts";
+import {
+  estimatedTokenField,
+  estimatedTokenLabel,
+  exactTokenLabel,
+  metricLayout,
+  renderMetricRow,
+  tokenLabelLayout,
+  type MetricLayout,
+  type MetricRow,
+  type TokenLabelLayout,
+} from "./metric-rows.ts";
 import {
   detectRuntimeAdditions,
   getPromptRemainder,
@@ -176,35 +187,6 @@ const DEFAULT_MODE: ViewMode = "summary";
 // brand, token figures, total rows, and the carried part of the context bar.
 function accent(theme: Theme | undefined, text: string): string {
   return ink(theme, "accent", text);
-}
-
-type TokenLabelLayout = { unitWidth: number; fieldWidth: number };
-
-function tokenIntegerWidth(tokens: number): number {
-  return compactCount(tokens).split(".", 1)[0].length;
-}
-
-function estimatedTokenLabel(tokens: number, layout: TokenLabelLayout = tokenLabelLayout([tokens])): string {
-  const leftPad = " ".repeat(Math.max(0, layout.unitWidth - tokenIntegerWidth(tokens)));
-  return `${leftPad}~${compactCount(tokens)}`;
-}
-
-function estimatedTokenField(tokens: number, layout: TokenLabelLayout): string {
-  return estimatedTokenLabel(tokens, layout).padEnd(layout.fieldWidth, " ");
-}
-
-function exactTokenLabel(tokens: number, layout: TokenLabelLayout = tokenLabelLayout([tokens])): string {
-  const leftPad = " ".repeat(Math.max(0, layout.unitWidth - tokenIntegerWidth(tokens)) + 1);
-  return `${leftPad}${compactCount(tokens)}`;
-}
-
-function tokenLabelLayout(tokens: number[]): TokenLabelLayout {
-  const unitWidth = Math.max(0, ...tokens.map(tokenIntegerWidth));
-  const rawLabels = tokens.map((token) => {
-    const leftPad = " ".repeat(Math.max(0, unitWidth - tokenIntegerWidth(token)));
-    return `${leftPad}~${compactCount(token)}`;
-  });
-  return { unitWidth, fieldWidth: Math.max(0, ...rawLabels.map((label) => label.length)) };
 }
 
 function formatPercent(value: number | null): string | undefined {
@@ -725,13 +707,6 @@ function nextMode(mode: ViewMode): ViewMode {
   return mode === "summary" ? "compact" : mode === "compact" ? "expanded" : "summary";
 }
 
-function padLabel(label: string, width = 42): string {
-  // Overlong labels truncate rather than overflow: the token column is a column, and a
-  // single 40-char title must not shift it (the … keeps the loss visible).
-  const fitted = label.length >= width ? `${label.slice(0, Math.max(0, width - 2))}${ELLIPSIS}` : label;
-  return fitted.padEnd(width, " ");
-}
-
 // Methodology is stated here, once, in the dim hint line (design language §5) — data
 // rows carry only raw sizes. When the session or tool method deviates from the text
 // ratio, say so here (tool tokens may come from the OpenAI formula or a different
@@ -755,31 +730,6 @@ function renderHeader(snapshot: PrefixSnapshot, mode: ViewMode, theme: Theme): s
     active: mode,
     hint: `${ctrlO}: cycle view${SEP}model ${modelLabel(snapshot.model)}${SEP}${methodologyHint(snapshot.heuristic)}`,
   });
-}
-
-// One renderer for every label/tokens/detail row — section rows, session rows, and
-// totals all flow through here, so alignment and grammar can never diverge.
-type MetricRow = {
-  label: string;
-  tokens: number;
-  /** pi-reported numbers render without the ~ estimate marker. */
-  exact?: boolean;
-  /** total rows: accent + bold. */
-  emphasis?: boolean;
-  /** dim suffix, parens included, e.g. "(1.2k ch)" or "(residual)". */
-  detail?: string;
-  /** summary section rows open with the family ▸ glyph (design language §1). */
-  section?: boolean;
-};
-
-function renderMetricRow(row: MetricRow, theme: Theme, layout?: TokenLabelLayout): string {
-  const tokenText = `${row.exact ? exactTokenLabel(row.tokens, layout) : estimatedTokenLabel(row.tokens, layout)} tokens`;
-  if (row.emphasis) {
-    return `  ${accent(theme, theme.bold(`${padLabel(row.label)}${tokenText}`))}${row.detail ? ` ${theme.fg("dim", row.detail)}` : ""}`;
-  }
-  const lead = row.section ? `${accent(theme, GLYPH.section)} ` : "";
-  const labelWidth = row.section ? 40 : 42; // glyph + space keep the token column aligned
-  return `  ${lead}${theme.fg("muted", padLabel(row.label, labelWidth))}${theme.fg("dim", `${tokenText}${row.detail ? ` ${row.detail}` : ""}`)}`;
 }
 
 function joinLeftRight(left: string, right: string, width: number, gap = 2): string {
@@ -945,73 +895,84 @@ function renderContextBar(snapshot: PrefixSnapshot, estimate: SessionEstimate, t
     : [`  ${bar}`, `  ${theme.fg("dim", legend)}`];
 }
 
-function renderSessionRows(snapshot: PrefixSnapshot, theme: Theme, width: number, layout?: TokenLabelLayout): string[] {
+type SessionMetrics = { rows: MetricRow[]; estimate: SessionEstimate; bar: boolean };
+
+function sessionMetrics(snapshot: PrefixSnapshot): SessionMetrics | undefined {
   const estimate = buildSessionEstimate(snapshot);
-  if (!snapshot.session || !estimate) return [];
+  if (!snapshot.session || !estimate) return undefined;
   const sessionShare = ctxShareLabel(estimate.totalTokens, snapshot.contextUsage, { estimate: true });
   const provenance = estimate.totalSource === "pi" ? "Pi-based" : "heuristic fallback";
-  const rows = [
-    "",
-    renderMetricRow({ label: "Tool outputs", tokens: estimate.toolOutputTokens, detail: countDetail(snapshot.session.toolOutputChars) }, theme, layout),
-    renderMetricRow({ label: "Messages", tokens: estimate.messageTokens, detail: countDetail(snapshot.session.messageChars) }, theme, layout),
+  const rows: MetricRow[] = [
+    { label: "Tool outputs", tokens: estimate.toolOutputTokens, detail: countDetail(snapshot.session.toolOutputChars) },
+    { label: "Messages", tokens: estimate.messageTokens, detail: countDetail(snapshot.session.messageChars) },
   ];
   if (estimate.thinkingSummaryTokens > 0) {
-    rows.push(renderMetricRow({
+    rows.push({
       label: "Thinking summaries",
       tokens: estimate.thinkingSummaryTokens,
       detail: countDetail(snapshot.session.thinkingSummaryChars),
-    }, theme, layout));
+    });
   }
   if (estimate.reasoningTokens !== undefined) {
-    rows.push(renderMetricRow({
+    rows.push({
       label: "Reasoning context",
       tokens: estimate.reasoningTokens,
       exact: true,
       detail: "(provider)",
-    }, theme, layout));
+    });
   }
   rows.push(
-    renderMetricRow({ label: "Unattributed", tokens: estimate.unattributedTokens, detail: "(accounting gap)" }, theme, layout),
-    renderMetricRow({
+    { label: "Unattributed", tokens: estimate.unattributedTokens, detail: "(accounting gap)" },
+    {
       label: "Total session",
       tokens: estimate.totalTokens,
       emphasis: true,
       detail: sessionShare ? `(${sessionShare} · ${provenance})` : `(${provenance})`,
-    }, theme, layout),
+    },
   );
   const usage = snapshot.contextUsage;
-  if (usage && usage.tokens !== null) {
-    if (snapshot.preSwitchUsage) {
-      // The provider-backed portion is in the old model's currency (issue #58).
-      // Name it without dividing by the new window; preserve Pi's estimate marker
-      // when trailing local messages have been added after that billed response.
-      const usageEstimated = snapshot.session.contextUsageEstimated;
-      rows.push(renderMetricRow({
-        label: "Total request",
-        tokens: usage.tokens,
-        exact: !usageEstimated,
-        emphasis: true,
-        detail: usageEstimated
-          ? `(pre-switch total \u00b7 ${snapshot.preSwitchUsage.billedModel} usage + Pi est.)`
-          : `(pre-switch usage \u00b7 ${snapshot.preSwitchUsage.billedModel} tokens)`,
-      }, theme, layout));
-      return rows;
-    }
-    const percent = formatPercent(usage.percent);
-    const window = usage.contextWindow > 0 ? contextWindowLabel(usage.contextWindow) : undefined;
-    const usageEstimated = snapshot.session.contextUsageEstimated;
-    rows.push(renderMetricRow({
+  if (!usage || usage.tokens === null) return { rows, estimate, bar: false };
+  const usageEstimated = snapshot.session.contextUsageEstimated;
+  if (snapshot.preSwitchUsage) {
+    // The provider-backed portion is in the old model's currency (issue #58).
+    // Name it without dividing by the new window; preserve Pi's estimate marker
+    // when trailing local messages have been added after that billed response.
+    rows.push({
       label: "Total request",
       tokens: usage.tokens,
       exact: !usageEstimated,
       emphasis: true,
-      detail: percent && window
-        ? usageEstimated ? `(${percent} · Pi est.)` : `(${percent} / ${window} ctx)`
-        : usageEstimated ? "(Pi est.)" : "(Pi usage)",
-    }, theme, layout));
-    rows.push(...renderContextBar(snapshot, estimate, theme, width));
+      detail: usageEstimated
+        ? `(pre-switch total \u00b7 ${snapshot.preSwitchUsage.billedModel} usage + Pi est.)`
+        : `(pre-switch usage \u00b7 ${snapshot.preSwitchUsage.billedModel} tokens)`,
+    });
+    return { rows, estimate, bar: false };
   }
-  return rows;
+  const percent = formatPercent(usage.percent);
+  const window = usage.contextWindow > 0 ? contextWindowLabel(usage.contextWindow) : undefined;
+  rows.push({
+    label: "Total request",
+    tokens: usage.tokens,
+    exact: !usageEstimated,
+    emphasis: true,
+    detail: percent && window
+      ? usageEstimated ? `(${percent} · Pi est.)` : `(${percent} / ${window} ctx)`
+      : usageEstimated ? "(Pi est.)" : "(Pi usage)",
+  });
+  return { rows, estimate, bar: true };
+}
+
+function renderSessionRows(session: SessionMetrics | undefined, snapshot: PrefixSnapshot, theme: Theme, layout: MetricLayout): string[] {
+  if (!session) return [];
+  return [
+    "",
+    ...session.rows.flatMap((row) => renderMetricRow(row, theme, layout)),
+    ...(session.bar ? renderContextBar(snapshot, session.estimate, theme, layout.width) : []),
+  ];
+}
+
+function harnessTotalRow(snapshot: PrefixSnapshot): MetricRow {
+  return { label: "Total harness", tokens: totalTokens(snapshot), emphasis: true, detail: harnessDetail(snapshot) };
 }
 
 function summaryTokenLayout(snapshot: PrefixSnapshot): TokenLabelLayout {
@@ -1031,19 +992,21 @@ function summaryTokenLayout(snapshot: PrefixSnapshot): TokenLabelLayout {
 
 function renderSummary(snapshot: PrefixSnapshot, theme: Theme, width = 80): string[] {
   const lines = renderHeader(snapshot, "summary", theme);
-  const layout = summaryTokenLayout(snapshot);
-  lines.push("");
-  for (const section of snapshot.sections) {
-    lines.push(renderMetricRow({
+  const harnessRows: MetricRow[] = [
+    ...snapshot.sections.map((section): MetricRow => ({
       label: section.title,
       tokens: sectionTokens(section),
       detail: countDetail(sectionChars(section)),
       section: true,
-    }, theme, layout));
-  }
+    })),
+    harnessTotalRow(snapshot),
+  ];
+  const session = sessionMetrics(snapshot);
+  const layout = metricLayout([...harnessRows, ...(session?.rows ?? [])], summaryTokenLayout(snapshot), width);
   lines.push(
-    renderMetricRow({ label: "Total harness", tokens: totalTokens(snapshot), emphasis: true, detail: harnessDetail(snapshot) }, theme, layout),
-    ...renderSessionRows(snapshot, theme, width, layout),
+    "",
+    ...harnessRows.flatMap((row) => renderMetricRow(row, theme, layout)),
+    ...renderSessionRows(session, snapshot, theme, layout),
   );
   lines.push(""); // panel tail spacer (design language §8)
   return lines;
@@ -1116,18 +1079,21 @@ function renderCompact(snapshot: PrefixSnapshot, theme: Theme, width: number): s
       lines.push(...renderScanRows(section.compactRows, theme, width, layout));
     }
   }
-  const sessionTokenLayout = summaryTokenLayout(snapshot);
-  lines.push("", renderCompactTotalRow(snapshot, theme, layout), ...renderSessionRows(snapshot, theme, width, sessionTokenLayout));
+  const session = sessionMetrics(snapshot);
+  const sessionLayout = metricLayout(session?.rows ?? [], summaryTokenLayout(snapshot), width);
+  lines.push("", renderCompactTotalRow(snapshot, theme, layout), ...renderSessionRows(session, snapshot, theme, sessionLayout));
   lines.push(""); // panel tail spacer (design language §8)
   return lines;
 }
 
 function renderExpanded(snapshot: PrefixSnapshot, theme: Theme, width: number): string[] {
   const lines = renderHeader(snapshot, "expanded", theme);
-  const layout = summaryTokenLayout(snapshot);
+  const harnessRow = harnessTotalRow(snapshot);
+  const session = sessionMetrics(snapshot);
+  const layout = metricLayout([harnessRow, ...(session?.rows ?? [])], summaryTokenLayout(snapshot), width);
   lines.push(
-    renderMetricRow({ label: "Total harness", tokens: totalTokens(snapshot), emphasis: true, detail: harnessDetail(snapshot) }, theme, layout),
-    ...renderSessionRows(snapshot, theme, width, layout),
+    ...renderMetricRow(harnessRow, theme, layout),
+    ...renderSessionRows(session, snapshot, theme, layout),
   );
 
   for (const section of snapshot.sections) {
