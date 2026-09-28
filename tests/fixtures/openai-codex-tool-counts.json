@@ -1,0 +1,721 @@
+{
+  "_source": "openai-codex/gpt-6-sol prompt tokens with one tool, less the no-tool prompt and the 16-token tool block; the last seven are structure-heavy probes (2026-09-28)",
+  "blockTokens": 16,
+  "tools": [
+    {
+      "name": "read",
+      "description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+      "schema": {
+        "type": "object",
+        "required": [
+          "path",
+          "offset",
+          "limit"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path to the file to read (relative or absolute)"
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "number",
+                "description": "Line number to start reading from (1-indexed)"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "number",
+                "description": "Maximum number of lines to read"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "measuredTokens": 135
+    },
+    {
+      "name": "bash",
+      "description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+      "schema": {
+        "type": "object",
+        "required": [
+          "command",
+          "timeout"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "Shell command to execute"
+          },
+          "timeout": {
+            "anyOf": [
+              {
+                "type": "number",
+                "description": "Timeout in seconds (optional, no default timeout)"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "measuredTokens": 93
+    },
+    {
+      "name": "edit",
+      "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+      "schema": {
+        "type": "object",
+        "required": [
+          "path",
+          "edits"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path to the file to edit (relative or absolute)"
+          },
+          "edits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "oldText",
+                "newText"
+              ],
+              "properties": {
+                "oldText": {
+                  "type": "string",
+                  "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call."
+                },
+                "newText": {
+                  "type": "string",
+                  "description": "Replacement text for this targeted edit."
+                }
+              },
+              "additionalProperties": false
+            },
+            "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead."
+          }
+        },
+        "additionalProperties": false
+      },
+      "measuredTokens": 188
+    },
+    {
+      "name": "write",
+      "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+      "schema": {
+        "type": "object",
+        "required": [
+          "path",
+          "content"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path to the file to write (relative or absolute)"
+          },
+          "content": {
+            "type": "string",
+            "description": "Content to write to the file"
+          }
+        },
+        "additionalProperties": false
+      },
+      "measuredTokens": 61
+    },
+    {
+      "name": "ping",
+      "description": "Send a ping.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "description": "Target host"
+          }
+        },
+        "required": [
+          "host"
+        ]
+      },
+      "measuredTokens": 21
+    },
+    {
+      "name": "mode",
+      "description": "Pick a mode",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "level": {
+            "type": "string",
+            "enum": [
+              "a",
+              "bb"
+            ],
+            "description": ""
+          }
+        }
+      },
+      "measuredTokens": 23
+    },
+    {
+      "name": "lit30",
+      "description": "Synthetic structure-heavy test tool.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "region": {
+            "anyOf": [
+              {
+                "const": "region-0",
+                "type": "string"
+              },
+              {
+                "const": "region-1",
+                "type": "string"
+              },
+              {
+                "const": "region-2",
+                "type": "string"
+              },
+              {
+                "const": "region-3",
+                "type": "string"
+              },
+              {
+                "const": "region-4",
+                "type": "string"
+              },
+              {
+                "const": "region-5",
+                "type": "string"
+              },
+              {
+                "const": "region-6",
+                "type": "string"
+              },
+              {
+                "const": "region-7",
+                "type": "string"
+              },
+              {
+                "const": "region-8",
+                "type": "string"
+              },
+              {
+                "const": "region-9",
+                "type": "string"
+              },
+              {
+                "const": "region-10",
+                "type": "string"
+              },
+              {
+                "const": "region-11",
+                "type": "string"
+              },
+              {
+                "const": "region-12",
+                "type": "string"
+              },
+              {
+                "const": "region-13",
+                "type": "string"
+              },
+              {
+                "const": "region-14",
+                "type": "string"
+              },
+              {
+                "const": "region-15",
+                "type": "string"
+              },
+              {
+                "const": "region-16",
+                "type": "string"
+              },
+              {
+                "const": "region-17",
+                "type": "string"
+              },
+              {
+                "const": "region-18",
+                "type": "string"
+              },
+              {
+                "const": "region-19",
+                "type": "string"
+              },
+              {
+                "const": "region-20",
+                "type": "string"
+              },
+              {
+                "const": "region-21",
+                "type": "string"
+              },
+              {
+                "const": "region-22",
+                "type": "string"
+              },
+              {
+                "const": "region-23",
+                "type": "string"
+              },
+              {
+                "const": "region-24",
+                "type": "string"
+              },
+              {
+                "const": "region-25",
+                "type": "string"
+              },
+              {
+                "const": "region-26",
+                "type": "string"
+              },
+              {
+                "const": "region-27",
+                "type": "string"
+              },
+              {
+                "const": "region-28",
+                "type": "string"
+              },
+              {
+                "const": "region-29",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "region"
+        ]
+      },
+      "measuredTokens": 200
+    },
+    {
+      "name": "enum40",
+      "description": "Synthetic structure-heavy test tool.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "country": {
+            "type": "string",
+            "enum": [
+              "C00",
+              "C01",
+              "C02",
+              "C03",
+              "C04",
+              "C05",
+              "C06",
+              "C07",
+              "C08",
+              "C09",
+              "C10",
+              "C11",
+              "C12",
+              "C13",
+              "C14",
+              "C15",
+              "C16",
+              "C17",
+              "C18",
+              "C19",
+              "C20",
+              "C21",
+              "C22",
+              "C23",
+              "C24",
+              "C25",
+              "C26",
+              "C27",
+              "C28",
+              "C29",
+              "C30",
+              "C31",
+              "C32",
+              "C33",
+              "C34",
+              "C35",
+              "C36",
+              "C37",
+              "C38",
+              "C39"
+            ],
+            "description": "Country code"
+          }
+        },
+        "required": []
+      },
+      "measuredTokens": 222
+    },
+    {
+      "name": "nullable20",
+      "description": "Synthetic structure-heavy test tool.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "flag_0": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_1": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_2": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_3": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_4": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_5": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_6": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_7": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_8": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_9": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_10": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_11": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_12": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_13": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_14": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_15": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_16": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_17": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_18": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flag_19": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": []
+      },
+      "measuredTokens": 177
+    },
+    {
+      "name": "defaults",
+      "description": "Synthetic structure-heavy test tool.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "default": 20,
+            "minimum": 1,
+            "maximum": 100
+          },
+          "sort": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "asc"
+          },
+          "verbose": {
+            "type": "boolean",
+            "default": false
+          },
+          "label": {
+            "type": "string",
+            "default": "untitled"
+          }
+        },
+        "required": []
+      },
+      "measuredTokens": 72
+    },
+    {
+      "name": "nested_deep",
+      "description": "Synthetic structure-heavy test tool.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "object",
+            "properties": {
+              "b": {
+                "type": "object",
+                "properties": {
+                  "c": {
+                    "type": "object",
+                    "properties": {
+                      "d": {
+                        "type": "object",
+                        "properties": {
+                          "e": {
+                            "type": "string",
+                            "description": "leaf"
+                          }
+                        },
+                        "required": []
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": []
+              }
+            },
+            "required": []
+          }
+        },
+        "required": []
+      },
+      "measuredTokens": 41
+    },
+    {
+      "name": "refs",
+      "description": "Synthetic structure-heavy test tool.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "$ref": "#/$defs/Point"
+          },
+          "b": {
+            "$ref": "#/$defs/Point"
+          },
+          "poly": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Point"
+            }
+          }
+        },
+        "$defs": {
+          "Point": {
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "x",
+              "y"
+            ]
+          }
+        }
+      },
+      "measuredTokens": 51
+    },
+    {
+      "name": "constraints",
+      "description": "Synthetic structure-heavy test tool.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "pattern": "^[^@]+@[^@]+$",
+            "minLength": 3,
+            "maxLength": 254
+          },
+          "age": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 150,
+            "multipleOf": 1
+          },
+          "score": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        },
+        "required": []
+      },
+      "measuredTokens": 84
+    }
+  ]
+}

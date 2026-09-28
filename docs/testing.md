@@ -170,11 +170,10 @@ not a mock. Anything requiring a live terminal goes to the smoke layer instead.
   Consistency invariant: `buildToolDisplayEstimate` counts the same payload shape that
   `buildToolNumerator` counts (per-tool vs aggregate); this is also the invariant the
   issue-#8 checker must preserve.
-- **OpenAI cookbook formula** (`estimateOpenAIFunctionToolTokens`): frozen multi-tool
-  fixture (nested objects, arrays, enums) → exact expected token number, computed once by
-  hand from the documented constants (+7/fn, +3/prop-section, +3/prop, −3/enum,
-  +3/enum-item, +12 once, chars/6.6 fragments). Guards the constants against "harmless"
-  refactors.
+- **OpenAI tool render** (`estimateOpenAIFunctionToolTokens`): four Pi built-in tools, two
+  small tools and seven structure-heavy probes with provider-measured counts
+  (`tests/fixtures/openai-codex-tool-counts.json`). Each tool must land within 15% and the
+  total within 2%.
 - **System-prompt parsing**: fixture prompt with two `<project_instructions>` blocks, an
   `<available_skills>` list with XML entities (`&amp;`, `&apos;`) → correct section split,
   unescaped names, wrapper-chars math (`content − Σ skill chars ≥ 0`); prompt *without*

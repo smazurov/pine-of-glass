@@ -157,7 +157,13 @@ Rules:
   cost · cause. Cause comes last and renders dim
 - methodology appears once per panel: a dim line under the panel header, never on
   data rows. Data rows carry at most a raw size in parens: `(9.2k ch)`
+- provenance is not methodology: a row whose count is measured rather than estimated
+  says so in its detail, `(52.3k ch · measured)` or `(52.3k ch · 78% measured)`, and a
+  measured total keeps its estimated parts visible, `(measured · rows ~0.5k)`
 - blank lines: one before a group, none within it
+- narrow terminals squeeze padding before they break a column: a label column gives
+  up its spare width down to the widest label, and a row that still overflows hangs
+  its dim detail under the quantity column rather than wrapping to column 0
 - tildify home paths; middle-truncate long lines, protecting the tail
 - ink survives the cut: `middleTruncate` replays the active SGR state after the
   ellipsis, so a cut inside a styled span never leaves the tail in default ink

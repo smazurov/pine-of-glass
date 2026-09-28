@@ -27,7 +27,7 @@ Providers convert tool schemas into an internal function representation, so no r
 
 Divisors were measured with Anthropic's `messages/count_tokens` endpoint and controlled live probes, against the same payloads Pi sends (2026-06-02).
 
-The decisive finding: Claude 4.7 changed tokenizer accounting. The identical captured Pi request counts 29,258 input tokens on `claude-opus-4-5` and 40,758 on `claude-opus-4-7`, and the count endpoint matched live accounting within 15 tokens. Against real Pi startup material this puts Claude 4.5/4.6 near chars ÷ 3.5 to 3.8 and Claude 4.7/4.8 near chars ÷ 2.6. Claude 5-generation ids (`claude-fable-5`, `claude-opus-5`) keep the post-4.7 accounting and get the same ÷ 2.6 rule; a live fable-5 request measured well below the generic anthropic ÷ 3.5 default. OpenAI-Codex markdown-ish system text measured close to chars ÷ 4.
+The decisive finding: Claude 4.7 changed tokenizer accounting. The identical captured Pi request counts 29,258 input tokens on `claude-opus-4-5` and 40,758 on `claude-opus-4-7`, and the count endpoint matched live accounting within 15 tokens. Against real Pi startup material this puts Claude 4.5/4.6 near chars ÷ 3.5 to 3.8 and Claude 4.7/4.8 near chars ÷ 2.6. Claude 5-generation ids (`claude-fable-5`, `claude-opus-5`) keep the post-4.7 accounting and get the same ÷ 2.6 rule; a live fable-5 request measured well below the generic anthropic ÷ 3.5 default. OpenAI text is recalibrated below.
 
 A follow-up count on 3 August 2026 established the Claude 4.7+ family boundary. One byte-identical Pi payload counted 17,382 tokens on both `claude-fable-5` and `claude-opus-4-8`; `claude-opus-5` differed by only 4 once-per-tool-block overhead tokens and had the same 16,116-token system count. Contextimate therefore applies the Claude 4.7+ text profile to Fable 5 and Opus 5, including explicit Radius and OpenRouter relays whose model ids identify that downstream tokenizer. Bedrock Claude uses the same model-family text ratio while retaining its own provider payload shape and unmeasured tool divisor.
 
@@ -39,6 +39,7 @@ A second study on 5 August 2026 covered Gemini, Kimi, GLM, Cohere, Grok, DeepSee
 
 | Visible-text profile | Text divisor | Session divisor |
 |---|---:|---:|
+| OpenAI (Codex, Responses and Azure) | 4.4 | 4.0 |
 | Kimi K2 through K3 | 4.1 | 3.8 |
 | GLM 4.5 variants, 4.6 variants and standard 4.7 | 4.0 | 3.9 |
 | GLM 4.7-Flash, 5, 5.1 and 5.2 | 4.0 | 3.9 |
@@ -51,29 +52,37 @@ A second study on 5 August 2026 covered Gemini, Kimi, GLM, Cohere, Grok, DeepSee
 | Qwen 2.5 and 3 | 4.0 | 3.8 |
 | Qwen 3.5 | 3.9 | 3.5 |
 
+A third study on 28 September 2026 measured OpenAI directly. It sent the same payloads to GPT-5.5, GPT-5.6 Sol and Luna, and GPT-6 Sol and Luna through Codex, adding one piece of content at a time to a fixed baseline. Every model gave identical counts, and system text counted exactly as `o200k_base` plus a fixed 14-token wrapper, so GPT-6 did not change the tokenizer. Across 96 local AGENTS.md and CLAUDE.md files, `o200k_base` gives a median of 4.4 characters per token (pooled 4.3), so OpenAI text uses ÷ 4.4 instead of ÷ 4. The session divisor stays ÷ 4 because tool output is denser than instructions.
+
 These profiles cover visible text only. Dynamic aliases and unverified variants keep the generic estimate or fallback. The [tokenizer coverage audit](./contextimate-tokenizer-coverage-audit-2026-08-05.md) records the evidence and family boundaries.
 
 ## Tool schemas
 
-Raw size fails in both directions: minified JSON at chars ÷ 4 overcounts OpenAI schemas by roughly 2x, and no single divisor tracks schema shape (enums, nesting, description length).
+OpenAI does not send tool JSON to the model as-is. It renders each function as a TypeScript-style declaration, which keeps names, descriptions and types but drops most of the JSON syntax. Its [token-counting docs](https://developers.openai.com/api/docs/guides/token-counting) recommend the count endpoint for tools, but that needs an API key and a network call at startup, and Codex OAuth has no count endpoint.
 
-For OpenAI-style function tools the extension uses the OpenAI Cookbook-style local formula: fixed constants per function, per property level, per property and per enum value, plus schema text fragments (`name:description`, `propertyName:type:description`, enum values) estimated at chars ÷ 6.6. OpenAI's [token-counting docs](https://developers.openai.com/api/docs/guides/token-counting) say tools are hard to count locally and recommend their count endpoint; the [Cookbook formula](https://developers.openai.com/cookbook/examples/how_to_count_tokens_with_tiktoken) is the public local approximation, and the extension stays local to avoid startup network calls (which are also unavailable on Codex OAuth auth).
+Contextimate therefore estimates each OpenAI tool locally in two steps (`openai-cookbook`, a name kept for config compatibility):
 
-A synthetic schema ablation (2026-06-03: 20 schema shapes from empty to deeply nested, singletons and mixed subsets, constants fitted on two thirds of singletons only) validated it on held-out cases:
+1. **Render.** It writes the tool as OpenAI does: descriptions become `//` comments, properties become `name?: type,` lines, `enum`, `const`, `anyOf` and `oneOf` become unions, local `$ref`s are inlined, and defaults, titles and examples become comments. The provider also keeps keywords that have no TypeScript form, such as `format`, `pattern` or `minimum`, so the render appends them as a JSON comment.
+2. **Count.** It splits the render with the `o200k_base` pre-tokenizer pattern, counting each piece as one token plus one per 9 characters. On the rendered text this is within about 3% of the real tokenizer, with no vocabulary to ship.
+
+The tools total adds a fixed 16 tokens for the tool block.
+
+The render rules come from OpenAI's open-source [Harmony renderer](https://github.com/openai/harmony/blob/main/src/encoding.rs) and 41 single-feature live probes. The estimator was checked on 28 September 2026 against 424 tools, each sent alone through Codex, where the prompt minus a no-tool baseline gives its exact cost. The set covered 21 Pi and extension tools, all 368 MCP tools in the local cache (22 servers), and 35 synthetic schemas that are mostly structure: long option lists, nullable fields, `$ref`, nested arrays and constraints. Counts were identical on GPT-5.5, GPT-5.6 and GPT-6, and tool costs add exactly.
 
 ```text
-method                         held-out MAPE
-recursive formula, text ÷ 6.6       9.1%
-fitted raw divisor (÷ 7.215)       13.1%
-raw minified chars ÷ 5.5           33.2%
-raw minified chars ÷ 4             78.4%
+method                                 realistic tool sets     single tools     structure-heavy
+                                       median (p90) error      median error     single, median
+cookbook-style formula (before #132)   34.6% (49.9%)
+max(chars ÷ 8, (chars − 190) ÷ 4.5)     4.5% (15.1%)            9%               19%
+render + o200k piece count              2.3% (7.7%)             3%                7%
+render + exact o200k_base (ceiling)     1.5% (6.4%)             1%                2%
 ```
 
-Two changes made the formula win: counting nested-object and array-item properties recursively, and moving text fragments from chars ÷ 4 to chars ÷ 6.6.
+Realistic tool sets are random draws of 10 to 40 real tools. The piece-count constant (9) was chosen on the MCP tools alone. The largest remaining misses are a few very large MCP schemas, schema-valued `additionalProperties` and `allOf`; these appear only 9 times across the 389 real tools.
 
-Claude tool payloads measured near their text divisors (÷ 3.36 on Claude 4.5/4.6, ÷ 2.5 on the Claude 4.7+ family), so they use divisors of 3.3 and 2.6. Direct OpenAI Responses and Codex routes use ÷ 5.5 from OpenAI-Codex probes. Models that merely share Anthropic, OpenAI Chat or Responses wire formats use the matching payload shape with the fallback ÷ 4, not the upstream tokenizer. Unmeasured Gemini and Bedrock tool payloads also use ÷ 4.
+Claude tool payloads measured near their text divisors (÷ 3.36 on Claude 4.5/4.6, ÷ 2.5 on the Claude 4.7+ family), so they use divisors of 3.3 and 2.6. Direct OpenAI Responses and Azure routes use the same OpenAI render as Codex; they were not probed separately. Models that merely share Anthropic, OpenAI Chat or Responses wire formats use the matching payload shape with the fallback ÷ 4, not the upstream tokenizer. Unmeasured Gemini and Bedrock tool payloads also use ÷ 4.
 
-In the UI, a formula-counted tools row says `OpenAI formula · schema text ÷ 6.6` and its character count is a payload-size cue only: it is not what gets divided. Divisor-counted rows say things like `÷ 2.6 · Anthropic tool payload`. Each tool's own row is counted on that tool's own shaped payload or formula subtotal, and the schema tree is just the readable rendering of it.
+In the UI, a render-counted tools row says `· OpenAI tool render`, and its character count is the rendered text. Divisor-counted rows say things like `÷ 2.6 · Anthropic tool payload`. Each tool's own row is counted on that tool's own shaped payload or render, and the schema tree is just the readable rendering of it.
 
 ## Session rows and the total
 
@@ -82,13 +91,37 @@ In the UI, a formula-counted tools row says `OpenAI formula · schema text ÷ 6.
 The session split anchors on that total and claims only what it can count:
 
 ```text
-Tool outputs:        y         estimated from provider-shaped tool output chars
+Tool outputs:        y         measured from prompt growth where proven, otherwise estimated from chars
 Messages:            z         estimated from visible message text and tool-call structure
 Thinking summaries:  s         estimated from summaries not covered by exact retained reasoning
 Reasoning context:   r         exact reported reasoning retained in the anchored request
 Unattributed:        x-y-z-s-r remaining accounting gap
-Total session:       x         Pi's total minus the estimated static prefix
+Total session:       x         Pi's total minus the harness (measured where proven, otherwise estimated)
 ```
+
+### Measured tool outputs
+
+Every trusted response records its exact prompt size: uncached input plus cache reads and writes. Between two consecutive responses, the prompt grows by exactly what was appended: the earlier response as replayed, plus the tool results that followed it. Contextimate subtracts the earlier response's exact output tokens and attributes the rest to those tool results. It excludes reasoning from that subtraction when the response has no replay carrier, because the provider did not send it back.
+
+A step is measured only when all of these hold:
+
+- both responses come from the anchor model, so the count is in the anchor model's tokens
+- only tool results sit between them; a user or custom message makes the step unmeasured
+- the later request's cache read reaches within 2,048 tokens of the earlier prompt, which proves the earlier prompt was reused unchanged; Codex caches in blocks and often stops a few hundred tokens short, while a harness change breaks the cache far earlier
+- the growth is at least the replayed response
+
+Unmeasured tool results keep the chars ÷ session divisor estimate. The row detail says `measured` when every tool result is measured and names the measured share of characters when only some are. The measured figure includes the provider's per-item framing, about 11 tokens per tool result on Codex.
+
+The first real case was a binary file dumped by `head`: 28.1k characters that cost 22.8k tokens, not the 7.0k that chars ÷ 4 claimed. Replaying the last 400 local sessions on 28 September 2026, the Unattributed share of the session fell from a median of 8.3% (90th percentile 20.8%) to 0.0% (1.1%) on 116 Codex sessions, and from 9.9% (29.8%) to 2.4% (4.7%) on 19 Claude sessions. Of within-turn tool steps, 98.9% on Codex and 99.2% on Claude passed the cache check.
+
+### Measured harness
+
+The first request's prompt is the harness plus whatever preceded the first response, usually one user message. Contextimate uses it as `Total harness` when both of these hold:
+
+- every later trusted response up to the anchor comes from the anchor model and passes the same cache check against the one before it, and no compaction summary sits on the active path
+- the preceding messages estimate at 4,096 tokens or fewer, so subtracting them as an estimate cannot swamp the measurement
+
+The section rows stay estimates. The total's detail reads `(measured · rows ~17.2k · ~7% ctx)`, so the gap between the measured total and the sum of the rows stays visible. A cache miss anywhere in the chain, typically after an idle pause, returns the harness to its estimate: the miss is also what a resumed session with a rebuilt system prompt looks like, and the two cannot be told apart. In the replay above, about a third of Codex sessions had such a miss. A harness change made after the anchor, such as a reload or a tool toggle, shows in the rows at once and in the measured total after the next response.
 
 The `thinking` text saved by Pi can be a provider-generated summary, not the model's full internal reasoning. Contextimate never estimates reasoning from that text or from an opaque signature. `Reasoning context` sums exact `usage.reasoning` values retained by the request anchoring Pi's total. The current response's reasoning appears as output. Earlier responses appear as input only when Pi replays their signed carrier under the provider's retention policy.
 
@@ -102,7 +135,7 @@ Other providers' historical reasoning stays unattributed until their retention i
 
 Summaries not covered by exact retained reasoning are estimated separately as `Thinking summaries`. This includes Claude thinking that Pi converts to ordinary text after a model change, and a current block whose session usage has no reasoning breakdown. Opaque carriers and redacted signatures are never converted from bytes or characters into supposed token counts. Missing provider breakdowns remain part of `Unattributed` rather than becoming estimated reasoning.
 
-`Unattributed` is the remaining accounting gap, not a diagnosis. It can absorb static-prefix estimation error, provider overhead, images, opaque replay carriers and reasoning when the provider supplies no breakdown. In particular, a large gap does not claim that the model used that many reasoning tokens.
+`Unattributed` is the remaining accounting gap, not a diagnosis. It can absorb static-prefix estimation error when the harness is not measured, estimation error in messages and unmeasured tool outputs, provider overhead, images, opaque replay carriers and reasoning when the provider supplies no breakdown. In particular, a large gap does not claim that the model used that many reasoning tokens.
 
 After compaction, Pi deliberately reports usage as unknown until the next assistant response arrives. The panel then falls back to its heuristic estimate and labels the whole total as heuristic.
 
@@ -147,7 +180,7 @@ Later files override scalar fields, `profiles` merge by name, and `rules` append
 
 `toolNumerator` picks the payload format to count:
 
-- `openai-cookbook`: the local formula above (the OpenAI-Codex default; the name is kept for config compatibility)
+- `openai-cookbook`: the OpenAI render above, which ignores `toolDenominator` (the OpenAI default; the name is kept for config compatibility)
 - `openai-responses` / `openai-codex-responses`: Responses-style function objects
 - `openai-chat` / `openai-completions` / `mistral`: Chat Completions-style `{ type, function }` objects
 - `anthropic`: `{ name, description, input_schema }`

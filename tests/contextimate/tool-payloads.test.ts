@@ -1,6 +1,6 @@
-// Provider payload formats + the OpenAI cookbook-style formula. The displayed token
-// number is only as honest as these payloads; the formula constants are pinned against
-// hand-computed expectations so "harmless" refactors cannot drift them.
+// Provider payload formats + the OpenAI tool render. The displayed token number is only
+// as honest as these payloads; the render is pinned against provider-measured counts.
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -77,16 +77,16 @@ test("unknown formats fall back to the OpenAI Responses payload", () => {
   assert.deepEqual(toolPayload(ping, "some-future-format"), toolPayload(ping, "openai-responses"));
 });
 
-test("OpenAI cookbook formula matches hand-computed expectations", () => {
-  // ping: 7 + ceil(len("ping:Send a ping")/6.6)=3 + 3(props) + [3 + ceil(len("host:string:Target host")/6.6)=4] = 20
-  assert.equal(estimateOpenAIToolDefinitionTokens(ping), 20);
-  // mode: 7 + ceil(len("mode:Pick a mode")/6.6)=3 + 3(props)
-  //   + [3 + (-3 + (3+1) + (3+1)) + ceil(len("level:string:")/6.6)=2] = 23
-  assert.equal(estimateOpenAIToolDefinitionTokens(mode), 23);
-  // Aggregate adds +12 once.
-  assert.equal(estimateOpenAIFunctionToolTokens([ping]), 32);
-  assert.equal(estimateOpenAIFunctionToolTokens([ping, mode]), 55);
-  assert.equal(estimateOpenAIFunctionToolTokens([]), 0);
+test("OpenAI tool render tracks provider-measured counts", () => {
+  const measured = JSON.parse(readFileSync(new URL("../fixtures/openai-codex-tool-counts.json", import.meta.url), "utf8"));
+  const tools: Array<ToolSummary & { measuredTokens: number }> = measured.tools;
+  for (const tool of tools) {
+    const estimate = estimateOpenAIToolDefinitionTokens(tool);
+    assert.ok(Math.abs(estimate - tool.measuredTokens) <= tool.measuredTokens * 0.15, `${tool.name}: ${estimate} vs ${tool.measuredTokens}`);
+  }
+  const total = measured.blockTokens + tools.reduce((sum, tool) => sum + tool.measuredTokens, 0);
+  const estimate = estimateOpenAIFunctionToolTokens(tools);
+  assert.ok(Math.abs(estimate - total) <= total * 0.02, `${estimate} vs ${total}`);
 });
 
 test("displayed per-tool estimates count the same payload the section total counts", () => {
@@ -102,10 +102,9 @@ test("displayed per-tool estimates count the same payload the section total coun
     assert.equal(estimate.tokens, Math.ceil(estimate.chars / heuristic.toolDenominator));
   }
 
-  // Cookbook formula: per-tool display uses the per-tool formula; the section total is the
-  // sum of per-tool formulas + the once-per-request constant.
+  // OpenAI render: the section total is the per-tool estimates plus the tool block.
   const codexHeuristic = resolveHeuristic({ provider: "openai-codex", id: "gpt-5.5", api: "openai-codex-responses" }, {});
   const codexNumerator = buildToolNumerator([ping, mode], codexHeuristic);
   const perToolTokens = [ping, mode].map((tool) => buildToolDisplayEstimate(tool, codexHeuristic).tokens);
-  assert.equal(codexNumerator.tokens, perToolTokens.reduce((a, b) => a + b, 0) + 12);
+  assert.equal(codexNumerator.tokens, perToolTokens.reduce((a, b) => a + b, 0) + 16);
 });

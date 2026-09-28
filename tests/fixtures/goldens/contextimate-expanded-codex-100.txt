@@ -1,18 +1,18 @@
 
 [Contextimate] summary → compact → expanded
-  <expand-key>: cycle view · model openai-codex/gpt-5.5 · counts ch ÷ 4 · tools: OpenAI formula (OpenAI-Codex heuristic)
-  Total harness                              ~0.5k tokens (2.5k ch · <1% ctx)
+  <expand-key>: cycle view · model openai-codex/gpt-5.5 · counts ch ÷ 4.4 · session ÷ 4 · tools: OpenAI render (OpenAI-Codex heuristic)
+  Total harness                              ~0.5k tokens (1.9k ch · <1% ctx)
 
   Tool outputs                              ~13.1k tokens (52.3k ch)
   Messages                                   ~2.0k tokens (8.1k ch)
   Thinking summaries                         ~0.3k tokens (1.2k ch)
   Reasoning context                          12.0k tokens (provider)
   Unattributed                              ~36.4k tokens (accounting gap)
-  Total session                             ~63.8k tokens (~32% ctx · Pi-based)
+  Total session                             ~63.9k tokens (~32% ctx · Pi-based)
   Total request                              64.3k tokens (32.2% / 200k ctx)
-  █████████▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒  harness ~0.5k · session ~63.8k · free 135.7k
+  █████████▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒  harness ~0.5k · session ~63.9k · free 135.7k
 
-  Runtime system prompt  ~0.1k tokens                                                    0.2k ch ÷ 4
+  Runtime system prompt  ~0.0k tokens                                                  0.2k ch ÷ 4.4
     assembled at runtime: pi base prompt + tool/extension instructions · preview only
     of which tool/extension instructions: ~0.0k tokens (2 tool snippets, 1 guideline) · already counted in this row
 
@@ -23,28 +23,28 @@
     Guidelines:
     - Prefer rg over grep for searching.
 
-  Global AGENTS.md  ~0.0k tokens                                                         0.1k ch ÷ 4
+  Global AGENTS.md  ~0.0k tokens                                                       0.1k ch ÷ 4.4
     ~/.pi/agent/AGENTS.md · preview only
 
     # Global guidance
     Prefer clarity &amp; precision in every reply.
 
-  ~/projects/demo/AGENTS.md  ~0.0k tokens                                                0.1k ch ÷ 4
+  ~/projects/demo/AGENTS.md  ~0.0k tokens                                              0.1k ch ÷ 4.4
     ~/projects/demo/AGENTS.md · preview only
 
     # Demo project
     Run the demo suite before committing.
 
-  Skill frontmatter (3)  ~0.2k tokens                                                    0.9k ch ÷ 4
-    list wrapper/markup  ~0.1k tokens (0.4k ch ÷ 4)
+  Skill frontmatter (3)  ~0.2k tokens                                                  0.9k ch ÷ 4.4
+    list wrapper/markup  ~0.1k tokens (0.4k ch ÷ 4.4)
 
     alpha-skill  ~0.1k  Handles A & B cases with a long description so it sorts first in token orde…
     beta-skill   ~0.0k  It's the medium one.
     gamma        ~0.0k  Tiny.
 
-  Tools (3/4 active)  ~0.2k tokens                      1.3k ch · OpenAI formula · schema text ÷ 6.6
-    formula +7/fn +3/prop-section +3/prop -3/enum +3/enum-item +12 once · nested counted recursively
-    counted on the minified provider payload (1.3k ch); tree below is the readable view of it
+  Tools (3/4 active)  ~0.2k tokens                                      0.7k ch · OpenAI tool render
+    counted on OpenAI's TypeScript-style tool render (0.7k ch) with an o200k_base approximation,
+    plus 16 once
 
     search · user · ~/.pi/agent/npm/fixture/search.ts                                          ~0.1k
       Search the web with one or more queries.
@@ -54,7 +54,7 @@
       options       object            Search options
         numResults  number            Results per query
 
-    read · builtin                                                                             ~0.0k
+    read · builtin                                                                             ~0.1k
       Read the contents of a file.
       path          string  required  Path to the file to read
       offset        number            Line number to start reading from

@@ -30,6 +30,8 @@ const session = {
   messageChars: 1300,
   messageCount: 6,
   contextUsageEstimated: false,
+  measuredToolOutputTokens: 0,
+  measuredToolOutputChars: 0,
 };
 
 test("with Pi usage: total anchors to (Pi current − estimated harness) and residual is clamped", () => {
@@ -190,6 +192,8 @@ test("pre-switch usage names its old currency without losing Pi's estimate marke
   const switchedEstimate = buildSessionEstimate(switched)!;
   assert.equal(switchedEstimate.totalSource, "heuristic");
   assert.equal(switchedEstimate.reasoningTokens, undefined, "old-model reasoning cannot be reused in the target currency");
+  assert.equal(switched.session!.firstPrompt?.tokens, 40_002);
+  assert.equal(switchedEstimate.harnessSource, "estimate", "nor can the old model's measured harness");
   const exact = stripAnsi(renderSummary(switched, plainTheme, 80).join("\n"));
   assert.match(exact, /Total request\s+50\.0k tokens\s+\(pre-switch usage · gpt-5\.6-sol tokens\)/);
   assert.doesNotMatch(exact, /Reasoning context|\/ 200k ctx|free /, "old counts must not use the new model's currency");
@@ -269,7 +273,7 @@ test("methodology states session/tool methods only when they deviate from the te
   // Formula-counted tools are not a ch ratio at all — the hint must not pretend they are.
   assert.equal(
     methodologyHint(heuristic({ label: "OpenAI-Codex heuristic", textDenominator: 4, sessionDenominator: 4, toolDenominator: 5.5, toolNumerator: "openai-cookbook" })),
-    "counts ch ÷ 4 · tools: OpenAI formula (OpenAI-Codex heuristic)",
+    "counts ch ÷ 4 · tools: OpenAI render (OpenAI-Codex heuristic)",
   );
 });
 

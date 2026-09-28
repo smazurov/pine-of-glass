@@ -173,6 +173,7 @@ test("wire compatibility does not select a tokenizer family", () => {
   assert.equal(codex.toolDenominator, 5.5);
   const openai = resolveHeuristic(model("openai", "gpt-5.5", "openai-responses"), {});
   assert.equal(openai.label, "OpenAI Responses heuristic");
+  assert.equal(openai.toolNumerator, "openai-cookbook");
   assert.equal(openai.toolDenominator, 5.5);
   assert.equal(resolveHeuristic(model("zai", "glm-4.7", "openai-completions"), {}).toolDenominator, 4);
   assert.equal(resolveHeuristic(model("opencode", "qwen3-coder", "openai-responses"), {}).toolDenominator, 4);

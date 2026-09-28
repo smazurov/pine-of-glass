@@ -180,10 +180,10 @@ function tokenizerProfile(model: ModelSummary): TokenizerProfile | undefined {
   if (QWEN_35_MODEL.test(id)) return QWEN_35;
   if (QWEN_25_MODEL.test(id) || QWEN_3_MODEL.test(id)) return QWEN_25_3;
   if (model.provider.toLowerCase().includes("openai-codex")) {
-    return { label: "OpenAI-Codex heuristic", textDenominator: 4, sessionDenominator: 4 };
+    return { label: "OpenAI-Codex heuristic", textDenominator: 4.4, sessionDenominator: 4 };
   }
   if (model.provider.toLowerCase().includes("openai")) {
-    return { label: "OpenAI Responses heuristic", textDenominator: 4, sessionDenominator: 4 };
+    return { label: "OpenAI Responses heuristic", textDenominator: 4.4, sessionDenominator: 4 };
   }
   if (model.provider.toLowerCase().includes("google") || model.id.toLowerCase().includes("gemini")) {
     return { label: "Gemini/Vertex heuristic", textDenominator: 4, sessionDenominator: 4 };
@@ -207,7 +207,9 @@ function toolProfile(model: ModelSummary): ToolProfile | undefined {
   if (api === "bedrock-converse-stream") return { toolDenominator: 4, toolNumerator: "bedrock" };
   if (api === "pi-messages") return { toolDenominator: 4, toolNumerator: "pi-messages" };
   if (api === "openai-responses" || api === "azure-openai-responses") {
-    return { toolDenominator: provider.includes("openai") ? 5.5 : 4, toolNumerator: "openai-responses" };
+    return provider.includes("openai")
+      ? { toolDenominator: 5.5, toolNumerator: "openai-cookbook" }
+      : { toolDenominator: 4, toolNumerator: "openai-responses" };
   }
   return undefined;
 }

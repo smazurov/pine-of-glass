@@ -1,6 +1,8 @@
 // Provider tool payload formats and token estimators shared by the family.
 
-import { isJsonObject, type JsonValue } from "./boundary.ts";
+import assert from "node:assert/strict";
+
+import { isJsonObject, type JsonFields } from "./boundary.ts";
 import { estimateCharsAsTokens, type HeuristicNumbers } from "./heuristics.ts";
 
 /** The slice of a tool definition the estimators need; contextimate's ToolSummary
@@ -10,10 +12,6 @@ export type ToolDefinition = {
   description: string;
   schema: unknown;
 };
-
-// Character fragments of OpenAI tool-schema summaries tokenize denser than prose;
-// see estimateOpenAIFunctionToolTokens for the ablation this constant came from.
-export const OPENAI_TOOL_TEXT_FRAGMENT_DENOMINATOR = 6.6;
 
 // --- JSON schema readers shared by the tool estimators -----------------------------------
 
@@ -39,11 +37,6 @@ export function schemaPropertyType(property: unknown): string {
 export function schemaPropertyDescription(property: unknown): string {
   if (!isJsonObject(property)) return "";
   return typeof property.description === "string" ? trimFinalPeriod(property.description) : "";
-}
-
-function schemaPropertyEnum(property: unknown): JsonValue[] {
-  if (!isJsonObject(property) || !Array.isArray(property.enum)) return [];
-  return property.enum;
 }
 
 export function schemaArrayItemProperties(property: unknown): Record<string, unknown> {
@@ -163,67 +156,89 @@ export function toolPayloadLabel(format: string): string {
   }
 }
 
-// --- OpenAI cookbook-style tool formula ---------------------------------------------------
+// --- OpenAI tool render -------------------------------------------------------------------
 
-function estimateOpenAIToolTextTokens(text: string): number {
-  return estimateCharsAsTokens(text.length, OPENAI_TOOL_TEXT_FRAGMENT_DENOMINATOR);
+// OpenAI shows the model each function as a TypeScript-style declaration rather than JSON;
+// docs/pi-contextimate.md records the provider counts this render was checked against.
+const OPENAI_TOOL_BLOCK_TOKENS = 16;
+const TYPESCRIPT_PRIMITIVES = new Map([["string", "string"], ["number", "number"], ["integer", "number"], ["boolean", "boolean"], ["null", "null"]]);
+const RENDERED_KEYWORDS = new Set([
+  "type", "description", "properties", "required", "items", "enum", "const", "anyOf", "oneOf",
+  "default", "title", "examples", "nullable", "deprecated", "$ref", "$schema", "$defs", "definitions",
+]);
+
+// o200k_base's pre-tokenizer split. Each piece is about one token, plus one per 9 characters.
+const O200K_PIECES = /[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+/gu;
+const O200K_CHARS_PER_EXTRA_TOKEN = 9;
+
+function renderComment(text: string): string {
+  return text.split("\n").map((line) => `// ${line}\n`).join("");
+}
+
+function renderType(schema: unknown, defs: JsonFields, seen: string[]): string {
+  if (!isJsonObject(schema) || Object.keys(schema).length === 0) return "any";
+  if (typeof schema.$ref === "string") {
+    const target = defs[schema.$ref.split("/").at(-1)!];
+    return target === undefined || seen.includes(schema.$ref) ? "any" : renderType(target, defs, [...seen, schema.$ref]);
+  }
+  const variants = Array.isArray(schema.anyOf) ? schema.anyOf : Array.isArray(schema.oneOf) ? schema.oneOf : undefined;
+  if (variants) {
+    return variants.map((variant) => renderType(variant, defs, seen)
+      + (isJsonObject(variant) && typeof variant.description === "string" ? ` // ${variant.description}\n` : "")).join(" | ");
+  }
+  if (Array.isArray(schema.enum)) return schema.enum.map((value) => JSON.stringify(value)).join(" | ");
+  if ("const" in schema) return JSON.stringify(schema.const);
+  if (Array.isArray(schema.type)) return schema.type.map((type) => TYPESCRIPT_PRIMITIVES.get(String(type)) ?? String(type)).join(" | ");
+  if (schema.type === "object" || (schema.type === undefined && "properties" in schema)) return renderObject(schema, defs, seen);
+  if (schema.type === "array") {
+    const items = isJsonObject(schema.items) ? renderType(schema.items, defs, seen) : "any";
+    return items.includes(" | ") ? `Array<${items}>` : `${items}[]`;
+  }
+  return TYPESCRIPT_PRIMITIVES.get(String(schema.type)) ?? "any";
+}
+
+function renderObject(schema: JsonFields, defs: JsonFields, seen: string[]): string {
+  const properties = Object.entries(getSchemaProperties(schema));
+  if (properties.length === 0) return "object";
+  const required = new Set(getSchemaRequired(schema));
+  let out = "{\n";
+  for (const [name, value] of properties) {
+    const property = isJsonObject(value) ? value : {};
+    if (typeof property.title === "string") out += `// ${property.title}\n//\n`;
+    if (typeof property.description === "string" && property.description) out += renderComment(property.description);
+    if (Array.isArray(property.examples) && property.examples.length > 0) {
+      out += `// Examples:\n${property.examples.map((example) => `// - ${JSON.stringify(example)}\n`).join("")}`;
+    }
+    // The provider keeps keywords it has no TypeScript form for, such as format or minimum.
+    const unrendered = Object.entries(property).filter(([key]) => !RENDERED_KEYWORDS.has(key));
+    out += `${name}${required.has(name) ? "" : "?"}: ${renderType(property, defs, seen)}${property.nullable === true ? " | null" : ""},`
+      + ("default" in property ? ` // default: ${JSON.stringify(property.default)}` : "")
+      + (unrendered.length > 0 ? ` // ${JSON.stringify(Object.fromEntries(unrendered))}` : "")
+      + "\n";
+  }
+  return `${out}}`;
+}
+
+export function renderOpenAITool(tool: ToolDefinition): string {
+  const schema = tool.schema;
+  assert(isJsonObject(schema), `${tool.name} has no JSON-object parameter schema`);
+  const defs = [schema.$defs, schema.definitions].find(isJsonObject) ?? {};
+  const parameters = Object.keys(getSchemaProperties(schema)).length > 0 ? `_: ${renderObject(schema, defs, [])}` : "";
+  return `${tool.description ? renderComment(tool.description) : ""}type ${tool.name} = (${parameters}) => any;\n\n`;
 }
 
 export function estimateOpenAIToolDefinitionTokens(tool: ToolDefinition): number {
-  let tokens = 7;
-  tokens += estimateOpenAIToolTextTokens(`${tool.name}:${trimFinalPeriod(tool.description)}`);
-  const propertyEntries = Object.entries(getSchemaProperties(tool.schema));
-  if (propertyEntries.length > 0) tokens += 3;
-  for (const [propertyName, property] of propertyEntries) tokens += estimateOpenAIPropertyTokens(propertyName, property);
-  return tokens;
-}
-
-function estimateOpenAIPropertyTokens(propertyName: string, property: unknown): number {
-  const propInit = 3;
-  const propKey = 3;
-  const enumInit = -3;
-  const enumItem = 3;
-
-  let tokens = propKey;
-  const enumValues = schemaPropertyEnum(property);
-  if (enumValues.length > 0) {
-    tokens += enumInit;
-    for (const enumValue of enumValues) tokens += enumItem + estimateOpenAIToolTextTokens(String(enumValue));
-  }
-  tokens += estimateOpenAIToolTextTokens(`${propertyName}:${schemaPropertyType(property)}:${schemaPropertyDescription(property)}`);
-
-  const nestedEntries = Object.entries(getSchemaProperties(property));
-  if (nestedEntries.length > 0) {
-    tokens += propInit;
-    for (const [nestedName, nestedProperty] of nestedEntries) tokens += estimateOpenAIPropertyTokens(nestedName, nestedProperty);
-  }
-
-  const itemEntries = Object.entries(schemaArrayItemProperties(property));
-  if (itemEntries.length > 0) {
-    tokens += propInit;
-    for (const [itemName, itemProperty] of itemEntries) tokens += estimateOpenAIPropertyTokens(itemName, itemProperty);
-  }
-
+  let tokens = 0;
+  for (const [piece] of renderOpenAITool(tool).matchAll(O200K_PIECES)) tokens += 1 + Math.floor((piece.length - 1) / O200K_CHARS_PER_EXTRA_TOKEN);
   return tokens;
 }
 
 export function estimateOpenAIFunctionToolTokens(tools: ToolDefinition[]): number {
-  // OpenAI's public token-counting docs say exact tool counts need the Responses
-  // input-token endpoint. For no-API-call startup estimates, use the older
-  // cookbook/tiktoken-style schema-summary formula: model-specific constants plus
-  // name/description/property summaries, not raw schema JSON. Current public
-  // tiktoken maps GPT-5 and GPT-4o families to o200k_base, so use the GPT-4o/GPT-5
-  // family constants. A synthetic schema ablation found chars/6.6 over these schema
-  // text fragments, plus recursive nested property counting, beats raw schema-char
-  // denominators on held-out mixed schemas while remaining dependency-free.
-  let tokens = 0;
-  for (const tool of tools) tokens += estimateOpenAIToolDefinitionTokens(tool);
-  if (tools.length > 0) tokens += 12;
-  return tokens;
+  return tools.reduce((sum, tool) => sum + estimateOpenAIToolDefinitionTokens(tool), OPENAI_TOOL_BLOCK_TOKENS);
 }
 
-/** Total estimated tokens for a tool list under a family heuristic: the cookbook
- * formula where it applies, the payload char ratio everywhere else. */
+/** Total estimated tokens for a tool list under a family heuristic: the OpenAI render
+ * where it applies, the payload char ratio everywhere else. */
 export function estimateToolListTokens(
   tools: Array<ToolDefinition & { promptGuidelines?: string[] }>,
   heuristic: Pick<HeuristicNumbers, "toolNumerator" | "toolDenominator">,
