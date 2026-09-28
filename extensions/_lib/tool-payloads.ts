@@ -1,5 +1,7 @@
 // Provider tool payload formats and token estimators shared by the family.
 
+import assert from "node:assert/strict";
+
 import { isJsonObject, type JsonFields } from "./boundary.ts";
 import { estimateCharsAsTokens, type HeuristicNumbers } from "./heuristics.ts";
 
@@ -156,10 +158,10 @@ export function toolPayloadLabel(format: string): string {
 
 // --- OpenAI tool render -------------------------------------------------------------------
 
-// OpenAI shows the model each function as a TypeScript-style declaration rather than JSON,
-// then adds 16 tokens once for the tool block. renderOpenAITool reproduces that text; see
-// docs/pi-contextimate.md for the provider counts it was checked against.
+// OpenAI shows the model each function as a TypeScript-style declaration rather than JSON;
+// docs/pi-contextimate.md records the provider counts this render was checked against.
 const OPENAI_TOOL_BLOCK_TOKENS = 16;
+const TYPESCRIPT_PRIMITIVES = new Map([["string", "string"], ["number", "number"], ["integer", "number"], ["boolean", "boolean"], ["null", "null"]]);
 const RENDERED_KEYWORDS = new Set([
   "type", "description", "properties", "required", "items", "enum", "const", "anyOf", "oneOf",
   "default", "title", "examples", "nullable", "deprecated", "$ref", "$schema", "$defs", "definitions",
@@ -168,12 +170,6 @@ const RENDERED_KEYWORDS = new Set([
 // o200k_base's pre-tokenizer split. Each piece is about one token, plus one per 9 characters.
 const O200K_PIECES = /[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+/gu;
 const O200K_CHARS_PER_EXTRA_TOKEN = 9;
-
-export function countO200kTokens(text: string): number {
-  let tokens = 0;
-  for (const [piece] of text.matchAll(O200K_PIECES)) tokens += 1 + Math.floor((piece.length - 1) / O200K_CHARS_PER_EXTRA_TOKEN);
-  return tokens;
-}
 
 function renderComment(text: string): string {
   return text.split("\n").map((line) => `// ${line}\n`).join("");
@@ -192,14 +188,13 @@ function renderType(schema: unknown, defs: JsonFields, seen: string[]): string {
   }
   if (Array.isArray(schema.enum)) return schema.enum.map((value) => JSON.stringify(value)).join(" | ");
   if ("const" in schema) return JSON.stringify(schema.const);
-  if (Array.isArray(schema.type)) return schema.type.map((type) => (type === "integer" ? "number" : String(type))).join(" | ");
+  if (Array.isArray(schema.type)) return schema.type.map((type) => TYPESCRIPT_PRIMITIVES.get(String(type)) ?? String(type)).join(" | ");
   if (schema.type === "object" || (schema.type === undefined && "properties" in schema)) return renderObject(schema, defs, seen);
   if (schema.type === "array") {
     const items = isJsonObject(schema.items) ? renderType(schema.items, defs, seen) : "any";
     return items.includes(" | ") ? `Array<${items}>` : `${items}[]`;
   }
-  if (schema.type === "integer") return "number";
-  return schema.type === "string" || schema.type === "number" || schema.type === "boolean" || schema.type === "null" ? schema.type : "any";
+  return TYPESCRIPT_PRIMITIVES.get(String(schema.type)) ?? "any";
 }
 
 function renderObject(schema: JsonFields, defs: JsonFields, seen: string[]): string {
@@ -225,14 +220,17 @@ function renderObject(schema: JsonFields, defs: JsonFields, seen: string[]): str
 }
 
 export function renderOpenAITool(tool: ToolDefinition): string {
-  const schema = isJsonObject(tool.schema) ? tool.schema : {};
-  const defs = isJsonObject(schema.$defs) ? schema.$defs : isJsonObject(schema.definitions) ? schema.definitions : {};
+  const schema = tool.schema;
+  assert(isJsonObject(schema), `${tool.name} has no JSON-object parameter schema`);
+  const defs = [schema.$defs, schema.definitions].find(isJsonObject) ?? {};
   const parameters = Object.keys(getSchemaProperties(schema)).length > 0 ? `_: ${renderObject(schema, defs, [])}` : "";
   return `${tool.description ? renderComment(tool.description) : ""}type ${tool.name} = (${parameters}) => any;\n\n`;
 }
 
 export function estimateOpenAIToolDefinitionTokens(tool: ToolDefinition): number {
-  return countO200kTokens(renderOpenAITool(tool));
+  let tokens = 0;
+  for (const [piece] of renderOpenAITool(tool).matchAll(O200K_PIECES)) tokens += 1 + Math.floor((piece.length - 1) / O200K_CHARS_PER_EXTRA_TOKEN);
+  return tokens;
 }
 
 export function estimateOpenAIFunctionToolTokens(tools: ToolDefinition[]): number {

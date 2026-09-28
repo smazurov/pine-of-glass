@@ -145,7 +145,7 @@ type ToolNumeratorResult = {
   label: string;
   content: string;
   chars: number;
-  /** Present only for the openai-cookbook formula; ratio numerators divide chars instead. */
+  /** Present only for the OpenAI tool render; ratio numerators divide chars instead. */
   tokens?: number;
 };
 
