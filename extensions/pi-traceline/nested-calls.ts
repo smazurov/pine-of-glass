@@ -51,6 +51,8 @@ interface NestedCapture {
   resultChars: number | undefined;
   imageFact: string | undefined;
   isError: boolean | undefined;
+  /** The complete error text of a failed result; codemode's own record caps it. */
+  error: string | undefined;
 }
 
 // Captures survive a hot reload like the render cache does; a session change clears them.
@@ -70,6 +72,7 @@ export function recordNestedStart(toolCallId: string, args: unknown): void {
     resultChars: existing?.resultChars,
     imageFact: existing?.imageFact,
     isError: existing?.isError,
+    error: existing?.error,
   });
   if (captures.size > CAPTURE_CAP) {
     captures.delete(captures.keys().next().value!);
@@ -84,7 +87,14 @@ export function recordNestedEnd(toolCallId: string, result: ToolResultLike, isEr
     resultChars: resultTextCharCount(resultRow),
     imageFact: resultImageFact(resultRow) || undefined,
     isError,
+    error: isError ? resultTexts(result).join("\n") || undefined : undefined,
   });
+}
+
+function resultTexts(result: ToolResultLike | undefined): string[] {
+  if (!Array.isArray(result?.content)) return [];
+  return result.content.flatMap((block) =>
+    isJsonObject(block) && block.type === "text" && typeof block.text === "string" ? [block.text] : []);
 }
 
 // --- parsing ------------------------------------------------------------------------------
@@ -165,15 +175,11 @@ export function composedFactsOf(row: ToolRowDataLike | undefined): ComposedFacts
       call.resultChars = live.resultChars;
       call.imageFact = live.imageFact;
       if (call.status === "ok" && live.isError) call.status = "error";
+      if (live.error) call.error = live.error;
     }
   }
   const complete = nested?.complete !== false;
-  const texts: string[] = [];
-  if (Array.isArray(result?.content)) {
-    for (const block of result.content) {
-      if (isJsonObject(block) && block.type === "text" && typeof block.text === "string") texts.push(block.text);
-    }
-  }
+  const texts = resultTexts(result);
   const wall = SCRIPT_HEADER.exec(texts[0] ?? "")?.[1];
   const wallMs = wall !== undefined ? Math.round(Number(wall) * 1000) : undefined;
   const trimmed = typeof details?.fullOutputPath === "string" || TRUNCATION_NOTICE.test(texts.join(""));

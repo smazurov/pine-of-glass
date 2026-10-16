@@ -17,6 +17,13 @@ const CUT_MARK = "\u2026"; // …
 // for `cd ~/projects/repo` costs an ellipsis to save one column.
 const MIN_CUT_SAVING = 4; // agent-default (not a user rule): 2026-10-15
 
+// A command cut below this many columns is a crown with no story (§9.8); the row wraps
+// instead. agent-default (not a user rule): 2026-10-20
+export const COMMAND_FLOOR_COLS = 24;
+// Wrapped rows stop here; the remainder packs onto the last line by command (§9.8).
+// agent-default (not a user rule): 2026-10-20
+export const WRAP_LINE_CAP = 4;
+
 // The connector run that ends a command before the next crowned head: whitespace,
 // sequencers, flattened line breaks, pipes and opening group brackets. It belongs to
 // the tail, so a cut command drops it along with its arguments.
@@ -28,15 +35,14 @@ const GIT_GLOBAL_VALUE = new Set(["-c", "-C", "--git-dir", "--work-tree", "--nam
 const GIT_GLOBAL_FLAG = /^(?:--no-pager|-P|-p|--paginate|--bare|--no-replace-objects|--literal-pathspecs|--no-optional-locks|--(?:git-dir|work-tree|namespace|exec-path|config-env)=\S*)$/;
 
 type Unit = {
-  kind: "prefix" | "command";
   start: number;
   end: number; // full source range, trailing connector included
-  contentEnd: number; // where the trailing connector starts
-  floor: number; // content chars a cut always keeps
-  lead: number; // prefix only: chars kept before the middle cut
-  skip?: { start: number; end: number; headEnd: number }; // git global options
-  last: boolean;
-};
+  contentEnd: number;
+  floor: number;
+} & (
+  | { kind: "prefix"; lead: number }
+  | { kind: "command"; last: boolean; skip?: { start: number; end: number } }
+);
 
 // One shell word at `i`, quote-aware; returns its end.
 function wordEnd(body: string, i: number, limit: number): number {
@@ -54,36 +60,11 @@ function wordEnd(body: string, i: number, limit: number): number {
   return Math.min(i, limit);
 }
 
-function gitSkip(body: string, headEnd: number, limit: number): { skip: Unit["skip"]; subEnd: number } | undefined {
-  let i = headEnd;
-  let optionsEnd: number | undefined;
-  while (i < limit) {
-    while (i < limit && /\s/.test(body[i]!)) i++;
-    if (i >= limit) return undefined;
-    const end = wordEnd(body, i, limit);
-    const word = body.slice(i, end);
-    if (GIT_GLOBAL_VALUE.has(word)) {
-      let j = end;
-      while (j < limit && /\s/.test(body[j]!)) j++;
-      if (j >= limit) return undefined;
-      i = optionsEnd = wordEnd(body, j, limit);
-      continue;
-    }
-    if (GIT_GLOBAL_FLAG.test(word)) {
-      i = optionsEnd = end;
-      continue;
-    }
-    if (optionsEnd === undefined) return undefined;
-    return { skip: { start: headEnd, end: optionsEnd, headEnd }, subEnd: end };
-  }
-  return undefined;
-}
-
 // Content length when the unit is cut: a git command loses its global options to a
 // two-column ` …`; everything else counts its own source.
 function cutContentLength(unit: Unit): number {
   const length = unit.contentEnd - unit.start;
-  return unit.skip ? length - (unit.skip.end - unit.skip.start) + 2 : length;
+  return unit.kind === "command" && unit.skip ? length - (unit.skip.end - unit.skip.start) + 2 : length;
 }
 
 function fullWidth(unit: Unit): number {
@@ -101,13 +82,11 @@ function unitWidth(unit: Unit, keep: number): number {
   return cut > full - MIN_CUT_SAVING ? full : cut;
 }
 
-function keepAt(unit: Unit, level: number): number {
-  return Math.max(level, unit.floor);
-}
-
+// The leading context gives first (§9.8): it sits at its floor while commands share
+// the level, and only regains width from what the commands leave over.
 function totalWidth(units: Unit[], level: number): number {
   let total = 0;
-  for (const unit of units) total += unitWidth(unit, keepAt(unit, level));
+  for (const unit of units) total += unitWidth(unit, unit.kind === "prefix" ? unit.floor : Math.max(level, unit.floor));
   return total;
 }
 
@@ -128,10 +107,10 @@ function pieces(body: string, unit: Unit, keep: number): FitPiece[] {
   }
   const mark = unit.last ? CUT_MARK : `${CUT_MARK} `;
   if (!unit.skip) return [{ start: unit.start, end: safeCut(body, unit.start + keep), mark }];
-  const headLength = unit.skip.headEnd - unit.start;
+  const headLength = unit.skip.start - unit.start;
   const rest = keep - headLength - 2;
   return [
-    { start: unit.start, end: unit.skip.headEnd, mark: ` ${CUT_MARK}` },
+    { start: unit.start, end: unit.skip.start, mark: ` ${CUT_MARK}` },
     { start: unit.skip.end, end: safeCut(body, unit.skip.end + rest), mark },
   ];
 }
@@ -148,20 +127,36 @@ function buildUnits(body: string, heads: readonly FitHead[]): Unit[] {
     // or about ten chars when that segment is missing or very long.
     const slash = text.lastIndexOf("/", contentEnd - 1);
     const finalSegment = slash >= lead && contentEnd - slash <= 32 ? contentEnd - slash : 10; // agent-default (not a user rule): 2026-10-15
-    units.push({ kind: "prefix", start: 0, end: first, contentEnd, floor: Math.min(contentEnd, lead + finalSegment), lead, last: false });
+    units.push({ kind: "prefix", start: 0, end: first, contentEnd, floor: Math.min(contentEnd, lead + finalSegment), lead });
   }
   heads.forEach((head, index) => {
     const end = index + 1 < heads.length ? heads[index + 1]!.start : body.length;
     const text = body.slice(head.start, end);
     const last = index === heads.length - 1;
     const contentEnd = end - (last ? (/\s*$/.exec(text)?.[0].length ?? 0) : (TRAILING_CONNECTOR.exec(text)?.[0].length ?? 0));
-    const unit: Unit = { kind: "command", start: head.start, end, contentEnd, floor: head.end - head.start, lead: 0, last };
+    const unit: Unit = { kind: "command", start: head.start, end, contentEnd, floor: head.end - head.start, last };
     if (body.slice(head.start, head.end) === "git") {
-      const git = gitSkip(body, head.end, contentEnd);
-      if (git) {
-        unit.skip = git.skip;
-        // keep `git … <subcommand>` at the least
-        unit.floor = head.end - head.start + 2 + (git.subEnd - git.skip!.end);
+      let i = head.end;
+      let optionsEnd: number | undefined;
+      while (i < contentEnd) {
+        while (i < contentEnd && /\s/.test(body[i]!)) i++;
+        if (i >= contentEnd) break;
+        const end = wordEnd(body, i, contentEnd);
+        const word = body.slice(i, end);
+        if (GIT_GLOBAL_VALUE.has(word)) {
+          i = end;
+          while (i < contentEnd && /\s/.test(body[i]!)) i++;
+          if (i >= contentEnd) break;
+          i = optionsEnd = wordEnd(body, i, contentEnd);
+        } else if (GIT_GLOBAL_FLAG.test(word)) {
+          i = optionsEnd = end;
+        } else {
+          if (optionsEnd !== undefined) {
+            unit.skip = { start: head.end, end: optionsEnd };
+            unit.floor = head.end - head.start + 2 + end - optionsEnd;
+          }
+          break;
+        }
       }
     }
     units.push(unit);
@@ -169,17 +164,20 @@ function buildUnits(body: string, heads: readonly FitHead[]): Unit[] {
   return units;
 }
 
-/**
- * Plan a by-command fit of a compound bash body into `budget` columns (§9.8). Returns
- * undefined when the body fits, when it has fewer than two crowned heads, or when even
- * bare heads overflow; the caller then keeps the single middle cut.
- */
-export function fitCompoundCommand(body: string, heads: readonly FitHead[], budget: number): FitPiece[] | undefined {
-  if (heads.length < 2 || body.length <= budget) return undefined;
-  const units = buildUnits(body, heads);
+/** A by-command fit: the kept ranges, and whether any command was cut below the floor. */
+export type CompoundFit = { pieces: FitPiece[]; starved: boolean };
+
+// A body fits by unit when it has two crowned heads, or one behind a leading context
+// (§9.8): the context is the cuttable unit, and the single middle cut must not land on
+// the command because a `cd` spent the budget.
+function fitsByUnit(heads: readonly FitHead[]): boolean {
+  return heads.length >= 2 || (heads.length === 1 && heads[0]!.start > 0);
+}
+
+function fitUnits(body: string, units: Unit[], budget: number): CompoundFit | undefined {
   if (totalWidth(units, 0) > budget) return undefined;
-  // Water-filling: the highest common keep level that fits. Short commands render whole
-  // below it; long ones are cut back to it.
+  // Water-filling over the commands: the highest common keep level that fits. Short
+  // commands render whole below it; long ones are cut back to it.
   let low = 0;
   let high = Math.max(...units.map(cutContentLength));
   while (low < high) {
@@ -187,20 +185,100 @@ export function fitCompoundCommand(body: string, heads: readonly FitHead[], budg
     if (totalWidth(units, mid) <= budget) low = mid;
     else high = mid - 1;
   }
-  const keeps = units.map((unit) => keepAt(unit, low));
-  // Hand leftover columns to cut units, left to right, so the row ends flush.
+  const keeps = units.map((unit) => (unit.kind === "prefix" ? unit.floor : Math.max(low, unit.floor)));
+  // Hand leftover columns to cut units so the row ends flush: commands left to right,
+  // the context last (§9.8).
+  const order = [...units.keys()].sort((a, b) => Number(units[a]!.kind === "prefix") - Number(units[b]!.kind === "prefix"));
   let spare = budget - totalWidth(units, low);
   for (let progress = true; spare > 0 && progress;) {
     progress = false;
-    units.forEach((unit, index) => {
+    for (const index of order) {
+      const unit = units[index]!;
       const now = unitWidth(unit, keeps[index]!);
-      if (spare <= 0 || now >= fullWidth(unit)) return;
+      if (spare <= 0 || now >= fullWidth(unit)) continue;
       const next = unitWidth(unit, keeps[index]! + 1);
-      if (next - now > spare) return;
+      if (next - now > spare) continue;
       keeps[index]!++;
       spare -= next - now;
       progress = true;
-    });
+    }
   }
-  return units.flatMap((unit, index) => pieces(body, unit, keeps[index]!));
+  const starved = units.some((unit, index) =>
+    unit.kind === "command" && unitWidth(unit, keeps[index]!) < fullWidth(unit) && keeps[index]! < COMMAND_FLOOR_COLS);
+  return { pieces: units.flatMap((unit, index) => pieces(body, unit, keeps[index]!)), starved };
+}
+
+/**
+ * Plan a by-command fit of a bash body into `budget` columns (§9.8). Returns undefined
+ * when the body fits, when it has nothing to fit by unit, or when even bare heads
+ * overflow; the caller then keeps the single middle cut.
+ */
+export function fitCompoundCommand(body: string, heads: readonly FitHead[], budget: number): CompoundFit | undefined {
+  if (!fitsByUnit(heads) || body.length <= budget) return undefined;
+  return fitUnits(body, buildUnits(body, heads), budget);
+}
+
+// The painted width of a unit that ends a line: its connector stays, the whitespace
+// after it is not painted.
+function lineEndWidth(body: string, unit: Unit): number {
+  return fullWidth(unit) - (/\s*$/.exec(body.slice(unit.start, unit.end))?.[0].length ?? 0);
+}
+
+/**
+ * Plan a wrap of a bash body at command boundaries (§9.8): the first line has `budget`
+ * columns, continuation lines `contBudget`, and at most `maxLines` lines. Units pack
+ * whole onto lines; once the cap is reached, or a lone unit is wider than its line,
+ * the remainder fits by command onto that line so every head still shows. Returns
+ * undefined when the body fits on one line or has nothing to wrap.
+ */
+export function wrapCompoundCommand(
+  body: string,
+  heads: readonly FitHead[],
+  budget: number,
+  contBudget: number,
+  maxLines = WRAP_LINE_CAP,
+): FitPiece[][] | undefined {
+  if (!fitsByUnit(heads) || body.length <= budget) return undefined;
+  const units = buildUnits(body, heads);
+  const lines: FitPiece[][] = [];
+  let line: FitPiece[] = [];
+  let used = 0;
+  let lineBudget = budget;
+  for (let index = 0; index < units.length; index++) {
+    const unit = units[index]!;
+    // The context gives first (§9.8): a wrapping row's leading context is cut to its
+    // floor when that lets the first command share its line; a context line that
+    // would stand alone either way keeps its full path.
+    const next = units[index + 1];
+    if (unit.kind === "prefix" && next && fullWidth(unit) + lineEndWidth(body, next) > lineBudget &&
+      unitWidth(unit, unit.floor) + lineEndWidth(body, next) <= lineBudget) {
+      line.push(...pieces(body, unit, unit.floor));
+      used += unitWidth(unit, unit.floor);
+      continue;
+    }
+    if (used + lineEndWidth(body, unit) <= lineBudget) {
+      line.push({ start: unit.start, end: unit.end });
+      used += fullWidth(unit);
+      continue;
+    }
+    if (line.length > 0 && lines.length < maxLines - 1) {
+      lines.push(line);
+      line = [];
+      used = 0;
+      lineBudget = contBudget;
+      if (lineEndWidth(body, unit) <= lineBudget) {
+        line.push({ start: unit.start, end: unit.end });
+        used += fullWidth(unit);
+        continue;
+      }
+    }
+    // The last allowed line, or a unit wider than a fresh line: fit the remainder by
+    // command into what this line has left.
+    const rest = units.slice(index);
+    const fit = fitUnits(body, rest, lineBudget - used);
+    lines.push([...line, ...(fit ? fit.pieces : [{ start: rest[0]!.start, end: body.length }])]);
+    return lines.length > 1 ? lines : undefined;
+  }
+  if (line.length > 0) lines.push(line);
+  return lines.length > 1 ? lines : undefined;
 }
