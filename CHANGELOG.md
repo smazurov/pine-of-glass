@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.17.0 (2026-10-17)
+
 - Traceline records more of what a session changes in git: `created worktree fix`,
   `created branch fix`, `rebased fix`, `deleted fix, origin/fix` for a branch deleted
   locally and on the remote, `removed worktree ./wt`, and `opened #14` for
@@ -16,6 +18,14 @@
   A merge checked with `gh pr view` in a different `--repo` no longer counts either.
 - A silent merge behind an assignment (`GH_TOKEN=$(gh auth token) gh pr merge 755`)
   and a merge checked after a heredoc now read as merged.
+- Development and tests now run on Pi 1.3.0. The minimum supported Pi is unchanged.
+- Cachemire's model-switch estimate follows Pi 1.3, which drops the previous model's
+  thinking instead of sending it to the new model as text. On older Pi the estimate
+  still counts that text.
+- Cachemire expects a thinking-level change on direct OpenAI GPT-6 models with an API
+  key to keep the cache, as Pi 1.3 now sends it. It no longer reports that hit as a
+  surprise. With Sign in with ChatGPT, Pi still changes the request-level effort, and
+  Cachemire still expects a break.
 
 ## 0.16.0 (2026-10-16)
 
