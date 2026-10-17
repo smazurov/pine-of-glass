@@ -1,5 +1,4 @@
-import type { AssistantRowDataLike, AssistantRowPrototypeLike, ContainerLike, ToolRowDataLike, ToolRowLike } from "../_lib/chat.ts";
-import { installTraceMouse, type TraceMouseHost, type TraceMousePrototype } from "./click.ts";
+import type { AssistantRowDataLike, AssistantRowPrototypeLike, ContainerLike, ToolRowDataLike } from "../_lib/chat.ts";
 import type { TraceRenderCache } from "./render-cache.ts";
 import { isEmptyConnector, isCollapsedThinkingRow } from "./topology.ts";
 
@@ -14,20 +13,6 @@ export function objectCacheKey(value: object | undefined): string {
 
 export function cachedIntrinsic<T>(cache: TraceRenderCache, key: string, compute: (row: ToolRowDataLike) => T) {
   return (row: ToolRowDataLike | undefined): T | undefined => row ? cache.memo(row, key, () => compute(row)) : undefined;
-}
-
-export function installCachedTraceMouse(
-  proto: TraceMousePrototype, cache: TraceRenderCache, host: TraceMouseHost, topologyChanged: () => void,
-): void {
-  const original = proto.__tracelineOriginalUpdateDisplay ?? proto.updateDisplay;
-  proto.__tracelineOriginalUpdateDisplay = original;
-  const expansions = new WeakMap<ToolRowLike, unknown>();
-  proto.updateDisplay = function (this: ToolRowLike, ...args: unknown[]) {
-    cache.dirty(this);
-    if (expansions.get(this) !== this.expanded) { topologyChanged(); expansions.set(this, this.expanded); }
-    return original.apply(this, args);
-  };
-  installTraceMouse(proto, host);
 }
 
 export function installAssistantCacheHook(
@@ -56,13 +41,15 @@ export function installAssistantCacheHook(
   };
 }
 
-/** Rebind the callback on reload without stacking wrappers on the live container. */
-export function installContainerCacheHooks(cache: TraceRenderCache, chat: ContainerLike, changed: () => void): void {
-  if (chat.__tracelineCachePatched) { chat.__tracelineCachePatched.changed = changed; return; }
-  const binding = { changed };
+// Rebind on reload. Watch addChild because appendEntry emits no extension event.
+export function installContainerCacheHooks(
+  cache: TraceRenderCache, chat: ContainerLike, changed: () => void, added: (child: unknown) => void = () => {},
+): void {
+  if (chat.__tracelineCachePatched) { Object.assign(chat.__tracelineCachePatched, { changed, added }); return; }
+  const binding = { changed, added };
   if (typeof chat.addChild === "function") {
     const original = chat.addChild.bind(chat);
-    chat.addChild = (child: unknown) => { const result = original(child); binding.changed(); return result; };
+    chat.addChild = (child: unknown) => { const result = original(child); binding.changed(); binding.added(child); return result; };
   }
   if (typeof chat.removeChild === "function") {
     const original = chat.removeChild.bind(chat);

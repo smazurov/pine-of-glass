@@ -2,7 +2,9 @@
 // against extension-visible component shapes and contract-tested against the
 // installed pi (tests/contract/pi-internals.test.ts), never imported from
 // pi internals — that is what lets the family survive `pi update`.
+import type { CustomEntry, CustomMessageEntry } from "@earendil-works/pi-coding-agent";
 import { stripAnsi } from "./ansi.ts";
+import { isJsonObject } from "./boundary.ts";
 
 export interface ToolArgsLike {
   [key: string]: unknown;
@@ -60,8 +62,8 @@ export interface ToolRowDataLike {
 }
 
 export interface ToolRowLike extends ToolRowDataLike {
-  render: (width: number) => unknown;
-  setExpanded: (...args: unknown[]) => unknown;
+  render: (width: number) => string[];
+  setExpanded: (expanded: boolean) => void;
 }
 
 export interface AssistantMessageLike {
@@ -83,7 +85,7 @@ export interface AssistantRowLike extends AssistantRowDataLike {
 }
 
 export interface ToolRowPrototypeLike extends Partial<ToolRowLike> {
-  __tracelineOriginalRender?: (width: number) => unknown;
+  __tracelineOriginalRender?: (width: number) => string[];
   updateDisplay: (...args: unknown[]) => unknown;
   __tracelineOriginalUpdateDisplay?: (...args: unknown[]) => unknown;
 }
@@ -115,6 +117,28 @@ export function isToolRow(component: unknown): component is ToolRowLike {
   return typeof c.render === "function" && typeof c.setExpanded === "function" && "toolName" in c;
 }
 
+/** Pi's two notice shapes, with exactly one source (design language §9.15). */
+export type NoticeRowLike = (
+  | { message: Pick<CustomMessageEntry, "customType" | "content" | "details">; entry?: never }
+  | { entry: Pick<CustomEntry, "customType" | "data">; message?: never }
+) & {
+  _expanded: boolean;
+  customComponent?: { render: (width: number) => string[] };
+  render: (width: number) => string[];
+  setExpanded: (expanded: boolean) => void;
+};
+
+/** Any chat child the trace-row spacing rules walk over. */
+export type ChatRowLike = ToolRowDataLike | NoticeRowLike;
+
+/** An extension notice row: an expandable chat child built on a custom message or entry. */
+export function isNoticeRow(component: unknown): component is NoticeRowLike {
+  if (!isJsonObject(component)) return false;
+  if (typeof component.render !== "function" || typeof component.setExpanded !== "function" || "toolName" in component) return false;
+  const source = component.message ?? component.entry;
+  return isJsonObject(source) && typeof source.customType === "string";
+}
+
 /** An assistant message row: carries the hideThinkingBlock toggle. */
 export function isAssistantRow(component: unknown): component is AssistantRowLike {
   const c = component as { setHideThinkingBlock?: unknown; hideThinkingBlock?: unknown };
@@ -127,7 +151,7 @@ export interface ContainerLike {
   removeChild?: (child: unknown) => unknown;
   clear?: () => unknown;
   /** traceline-internal: membership hooks installed for scoped render invalidation. */
-  __tracelineCachePatched?: { changed: () => void };
+  __tracelineCachePatched?: { changed: () => void; added: (child: unknown) => void };
 }
 
 /** Depth-first search for the container whose direct children satisfy `predicate`,
