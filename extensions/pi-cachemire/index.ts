@@ -3,20 +3,18 @@ import type {
   ExtensionContext,
   ExtensionUIContext,
   Theme,
+  SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import type { ThemedText, TextContent } from "../_lib/themed-text.ts";
 import { booleanValue, isJsonObject, positiveNumberValue } from "../_lib/boundary.ts";
 import { captureTui } from "../_lib/capture.ts";
 import { type ContainerLike } from "../_lib/chat.ts";
 import {
-  anchorForAppend,
   appendAnchoredLine,
-  childAnchorKey,
-  reattachAnchored,
   type AnchoredLine,
 } from "../_lib/chatline.ts";
 import { configPaths, readJsonConfig } from "../_lib/config.ts";
-import { compactCount, formatDuration, formatUsd } from "../_lib/fmt.ts";
+import { LiveWidget } from "../_lib/live-widget.ts";
 import { GLYPH, ink, type Tone } from "../_lib/style.ts";
 import {
   classifyCall,
@@ -26,8 +24,8 @@ import {
   withheldThinkingCause,
   withinWarmPromise,
 } from "./classify.ts";
-import { UNKNOWN_WINDOW, cacheClock, nextClockUpdateMs, withinWarmHorizon } from "./clock.ts";
-import { predictBreak, rewriteCostUsd, sessionSavings, uncachedCostUsd } from "./economics.ts";
+import { UNKNOWN_WINDOW } from "./clock.ts";
+import { predictBreak, rewriteCostUsd, uncachedCostUsd } from "./economics.ts";
 import { activeToolDefinitions, computeSwitchForecast, type SwitchForecast, type SwitchTarget } from "./forecast.ts";
 import { restoreBranchRecords } from "./ledger.ts";
 import {
@@ -39,11 +37,7 @@ import {
   restoreLineageSnapshots,
 } from "./lineage.ts";
 import { renderBreakingLine, renderHeldLine, renderLedger, renderMissLine, renderRunSummary } from "./render.ts";
-import {
-  confirmedWindow,
-  retentionForRequest,
-  type RetentionMatch,
-} from "./retention.ts";
+import { confirmedWindow, retentionForRequest, type RetentionMatch } from "./retention.ts";
 import {
   recordBilledThinking,
   restoreBilledThinking,
@@ -53,7 +47,7 @@ import {
   thinkingRoute,
 } from "./thinking.ts";
 import { isWarmUsageEntry, syncWarmEntries, type WarmSyncState } from "./warm.ts";
-import { clearCacheWidgetTimer, mountCacheWidget, unmountCacheWidget, type CacheWidgetRuntime, updateCacheWidget } from "./widget.ts";
+import { clearCacheWidgetTimer, type CacheWidgetRuntime, updateCacheWidget } from "./widget.ts";
 import type {
   CacheWindow,
   CachemireConfig,
@@ -79,7 +73,6 @@ export type {
 } from "./types.ts";
 
 // Cachemire explains Pi's provider-reported cache usage and loop cost.
-
 const DEFAULT_CONFIG: CachemireConfig = {
   debug: false, // agent-default (not a user rule): 2026-09-24
   widget: true,
@@ -89,12 +82,6 @@ const DEFAULT_CONFIG: CachemireConfig = {
   missWarnUsd: 0.05,
   missWarnTokens: 20_000,
 };
-
-// --- chat scrollback append (display-only; never touches LLM context) -------------------
-// Anchored-line machinery lives in _lib/chatline.ts (shared with pi-meantime): lines
-// are appended straight to pi's chat container and re-attached across pi's chat
-// rebuilds via durable anchors. Cachemire re-exports the shape for its tests.
-export type { AnchoredLine } from "../_lib/chatline.ts";
 
 // --- live state ------------------------------------------------------------------------
 
@@ -112,10 +99,6 @@ interface CachemireState extends WarmSyncState {
   pendingPreviousWindow?: CacheWindow;
   pendingRetention?: RetentionMatch;
   pendingCacheGapMs?: number;
-  /** Model id at the time of the last billed call, and therefore of expectedRead. */
-  /** Provider/api that billed the last call: the same id through a different
-   * provider or wire api is a different cache (and possibly a different tokenizer). */
-  currentModelId?: string;
   /** Target-currency forecast while modelSwitched (issue #57); cleared by usage. */
   switchForecast?: SwitchForecast;
   /** Thinking level at the last billed call vs now; mirrors the model-switch pair. */
@@ -252,7 +235,7 @@ export default function piCachemire(pi: ExtensionAPI): void {
   // The active path decides what the next effort change is measured from: the level
   // its last billed call used, not the level Pi is holding now, which differs after a
   // late change before quitting, a --thinking flag on resume, or a branch switch.
-  const restoreThinkingForPath = (ctx: ExtensionContext, entries: readonly unknown[], leafId: string | null) => {
+  const restoreThinkingForPath = (ctx: ExtensionContext, entries: readonly SessionEntry[], leafId: string | null) => {
     const lastBilledLevel = restoreBilledThinking(s.thinkingEvidence, entries, leafId, ctx.model, Date.now());
     s.currentThinkingLevel = pi.getThinkingLevel();
     s.lastCallThinkingLevel = lastBilledLevel ?? s.currentThinkingLevel;
@@ -287,7 +270,7 @@ export default function piCachemire(pi: ExtensionAPI): void {
     }, { ...DEFAULT_CONFIG });
     const entries = ctx.sessionManager.getEntries();
     const branch = ctx.sessionManager.getBranch();
-    s.records = restoreBranchRecords(branch, classifyCall);
+    s.records = restoreBranchRecords(branch);
     s.seenWarmEntryIds = new Set(entries.filter(isWarmUsageEntry).map((entry) => entry.id));
     s.requestArmed = false;
     s.lineages = restoreLineageSnapshots(entries, event.reason === "reload" ? s.lineages : undefined);
@@ -295,7 +278,6 @@ export default function piCachemire(pi: ExtensionAPI): void {
     const model = ctx.model;
     if (model) {
       s.rates = model.cost;
-      s.currentModelId = model.id;
       s.modelLabel = `${model.provider}/${model.id}`;
     }
     Object.assign(s, cacheStateForLineage(
@@ -324,14 +306,23 @@ export default function piCachemire(pi: ExtensionAPI): void {
     captureTui(ctx.ui, "__pi_cachemire_capture", (tui) => {
       s.tui = tui;
     });
-    mountCacheWidget(cacheWidget, ctx.ui, s.config.widget);
+    cacheWidget.widget = undefined;
+    if (s.config.widget) {
+      ctx.ui.setWidget("pi-cachemire", (tui) => {
+        cacheWidget.widget = new LiveWidget(tui);
+        return cacheWidget.widget;
+      });
+    }
     updateWidget();
   });
 
   pi.on("session_shutdown", async () => {
     if (!ownsState()) return;
     clearCacheWidgetTimer(cacheWidget);
-    if (s.ui) unmountCacheWidget(cacheWidget, s.ui);
+    if (s.ui) {
+      if (cacheWidget.widget) s.ui.setWidget("pi-cachemire", undefined);
+      cacheWidget.widget = undefined;
+    }
     g.__piCachemireOwner = undefined;
   });
 
@@ -431,7 +422,6 @@ export default function piCachemire(pi: ExtensionAPI): void {
     const model = event.model;
     s.rates = model.cost;
     s.modelLabel = `${model.provider}/${model.id}`;
-    s.currentModelId = model.id;
     // Caches are per-model on every provider, and the same id through a different
     // provider or wire api is a different cache too; the stored token count is also in
     // the old tokenizer's currency. Switching back before the next call revives both.
@@ -560,7 +550,7 @@ export default function piCachemire(pi: ExtensionAPI): void {
     const promptSize = usage.input + usage.cacheRead + usage.cacheWrite;
     s.lineages.push({
       requestLeafId: s.pendingRequestLeafId ?? null,
-      responseAt: typeof message.timestamp === "number" ? message.timestamp : now,
+      responseAt: message.timestamp,
       requestAt,
       responseStartAt: s.pendingResponseAt,
       promptTokens: promptSize,
@@ -581,9 +571,9 @@ export default function piCachemire(pi: ExtensionAPI): void {
     s.expectedRead = promptSize;
     s.window = activeWindow;
     s.pendingRetention = undefined;
-    s.lastCallModelId = message.model ?? s.currentModelId ?? s.lastCallModelId;
-    s.lastCallProvider = message.provider ?? s.lastCallProvider;
-    s.lastCallApi = message.api ?? s.lastCallApi;
+    s.lastCallModelId = message.model;
+    s.lastCallProvider = message.provider;
+    s.lastCallApi = message.api;
     s.modelSwitched = false;
     s.switchForecast = undefined;
     s.lastCallThinkingLevel = s.currentThinkingLevel ?? s.lastCallThinkingLevel;
@@ -662,32 +652,3 @@ export default function piCachemire(pi: ExtensionAPI): void {
     },
   });
 }
-
-// Test-only surface. Pi's loader imports only the default export, so this is runtime-inert.
-export const internals = {
-  fingerprintPayload,
-  predictBreak,
-  renderBreakingLine,
-  withinWarmHorizon,
-  renderHeldLine,
-  diffFingerprints,
-  findBranchBaseline,
-  hydrateLineageResponseIds,
-  resolveCacheLineage,
-  restoreLineageSnapshots,
-  classifyCall,
-  uncachedCostUsd,
-  rewriteCostUsd,
-  sessionSavings,
-  compactCount,
-  formatUsd,
-  formatDuration,
-  childAnchorKey,
-  anchorForAppend,
-  reattachAnchored,
-  cacheClock,
-  nextClockUpdateMs,
-  renderRunSummary,
-  renderMissLine,
-  renderLedger,
-};

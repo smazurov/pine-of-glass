@@ -1,17 +1,18 @@
 // Shared accounting for the startup panel and plain-data report.
 import type { ContextUsage, ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { homedir } from "node:os";
+import { isJsonObject } from "../_lib/boundary.ts";
 import { compactCount } from "../_lib/fmt.ts";
 import { estimateCharsAsTokens, type ModelSummary } from "../_lib/heuristics.ts";
 import { SEP } from "../_lib/style.ts";
 import {
-  aggregateToolPayload, arrayItemsSchema, estimateOpenAIFunctionToolTokens,
+  aggregateToolPayload, estimateOpenAIFunctionToolTokens,
   estimateOpenAIToolDefinitionTokens, getSchemaProperties, getSchemaRequired,
   renderOpenAITool, schemaPropertyDescription, schemaPropertyType, toolPayload, toolPayloadLabel,
 } from "../_lib/tool-payloads.ts";
-import { inlineCount, ratioDetail } from "./metric-rows.ts";
+import { countDetail, ratioDetail } from "./metric-rows.ts";
 import { detectRuntimeAdditions, getPromptRemainder, parseSkillsBlock, PROJECT_INSTRUCTIONS_RE, type SkillSummary } from "./prompt-parsing.ts";
-import { scanSession, type SessionBreakdown, type SessionSource } from "./session-accounting.ts";
+import { estimateSessionBreakdown, scanSession, type SessionBreakdown, type SessionEstimate, type SessionSource } from "./session-accounting.ts";
 import { type ContextimateConfig, type ResolvedHeuristic, resolveHeuristic } from "./heuristic-config.ts";
 
 export type ToolSummary = {
@@ -99,7 +100,7 @@ function toolFields(schema: unknown, depth = 0): ToolField[] {
   for (const [name, property] of Object.entries(getSchemaProperties(schema))) {
     fields.push({ name, type: schemaPropertyType(property), required: required.has(name), description: schemaPropertyDescription(property), depth });
     // agent-default (not a user rule): 2026-09-28, preserve the panel's existing depth limit.
-    if (depth < 3) fields.push(...toolFields(property, depth + 1), ...toolFields(arrayItemsSchema(property), depth + 1));
+    if (depth < 3) fields.push(...toolFields(property, depth + 1), ...toolFields(isJsonObject(property) ? property.items : undefined, depth + 1));
   }
   return fields;
 }
@@ -180,7 +181,7 @@ export function buildSnapshot(
       compactRows: rows,
       expanded: {
         kind: "skills",
-        note: wrapperChars > 0 ? `list wrapper/markup  ${inlineCount(wrapperChars, textDenominator)}` : undefined,
+        note: wrapperChars > 0 ? `list wrapper/markup  ~${compactCount(estimateCharsAsTokens(wrapperChars, textDenominator))} tokens ${countDetail(wrapperChars, ratioDetail(textDenominator))}` : undefined,
         rows,
       },
     });
@@ -245,4 +246,17 @@ export function sectionTokens(section: PrefixSection): number {
 
 export function totalTokens(snapshot: PrefixSnapshot): number {
   return snapshot.sections.reduce((sum, section) => sum + sectionTokens(section), 0);
+}
+
+export function estimateSnapshotSession(snapshot: PrefixSnapshot): SessionEstimate | undefined {
+  if (!snapshot.session) return undefined;
+  // Provider counts from before a model switch are in the old model's tokens.
+  const session = snapshot.preSwitchUsage
+    ? { ...snapshot.session, reasoningTokens: undefined, measuredToolOutputTokens: 0, measuredToolOutputChars: 0, firstPrompt: undefined }
+    : snapshot.session;
+  return estimateSessionBreakdown(session, {
+    denominator: snapshot.heuristic.sessionDenominator,
+    harnessTokens: totalTokens(snapshot),
+    contextTokens: snapshot.preSwitchUsage ? undefined : snapshot.contextUsage?.tokens,
+  });
 }

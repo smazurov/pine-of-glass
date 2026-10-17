@@ -1,6 +1,7 @@
 import { Markdown, MouseRegion, Text, visibleWidth, wrapTextWithAnsi, type Component, type MarkdownTheme, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 
 import { rawIndexAtVisibleIndex, rawIndexBeforeVisibleIndex, stripAnsi } from "../_lib/ansi.ts";
+import { isJsonObject } from "../_lib/boundary.ts";
 import type { AssistantRowDataLike } from "../_lib/chat.ts";
 import { middleTruncate } from "../_lib/style.ts";
 import { drillState } from "./drill.ts";
@@ -25,38 +26,11 @@ const plainMarkdownTheme: MarkdownTheme = {
   underline: (text) => text,
 };
 
-function markdownToPlainInline(rawLine: string): string {
-  const markdown = stripAnsi(rawLine)
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!markdown) return "";
-
-  const rendered = new Markdown(markdown, 0, 0, plainMarkdownTheme).render(PREVIEW_RENDER_WIDTH);
-  const first = rendered.find((line) => stripAnsi(line).trim().length > 0);
-  return first ? stripAnsi(first).replace(/\s+/g, " ").trim() : markdown;
-}
-
 // Pi rebuilds thinking regions during streaming updates and click/visibility toggles.
 // Reuse derived previews across those rebuilds. Compare source text, not just length:
 // OpenAI Responses can replace thinking in place with final text at thinking_end.
 // WeakMap keys die with their message.
 const blockPreviewCache = new WeakMap<object, { source: string; preview: string }>();
-
-function previewForBlock(block: { type?: unknown; thinking?: unknown }): string | undefined {
-  if (block?.type !== "thinking" || typeof block.thinking !== "string" || !block.thinking.trim()) return undefined;
-  const cached = blockPreviewCache.get(block);
-  if (cached && cached.source === block.thinking) return cached.preview;
-
-  const fragments: string[] = [];
-  for (const line of block.thinking.split(/\r\n|\r|\n/)) {
-    const fragment = markdownToPlainInline(line);
-    if (fragment) fragments.push(fragment);
-  }
-  const preview = fragments.join(" · ");
-  blockPreviewCache.set(block, { source: block.thinking, preview });
-  return preview;
-}
 
 /** Pi's label line around its visible words: indent and opening ink, then closing ink. */
 function labelFrame(line: string) {
@@ -73,35 +47,8 @@ function replaceVisibleLabel(line: string, preview: string, width: number): stri
   return middleTruncate(`${open}${preview}${close}`, width);
 }
 
-/** A gist in the label's place and ink, wrapped under its first word, never cut (§9.15). */
-function gistLabelLines(line: string, gist: string, width: number): string[] {
-  const { open, close, indent } = labelFrame(line);
-  return wrapTextWithAnsi(gist, Math.max(1, width - indent - 2)).map((text, i) => `${open}${i ? "  " : "≈ "}${text}${close}`);
-}
-
 // A run is settled once anything follows it in the message (§9.15): its text is final.
 type RunPreview = { text: string; settled: boolean };
-
-function thinkingPreviews(comp: AssistantRowDataLike): RunPreview[] | undefined {
-  const content = comp.lastMessage?.content;
-  if (!Array.isArray(content)) return undefined;
-
-  const previews: RunPreview[] = [];
-  let group: string[] | undefined;
-  for (const block of content) {
-    if (block && typeof block === "object" && (block as { type?: unknown }).type === "thinking") {
-      // Non-empty thinking blocks extend the current group; empty ones leave it open,
-      // matching the previous accumulation semantics.
-      const preview = previewForBlock(block as { type?: unknown; thinking?: unknown });
-      if (preview !== undefined) (group ??= []).push(preview);
-      continue;
-    }
-    if (group) previews.push({ text: group.join(" · "), settled: true });
-    group = undefined;
-  }
-  if (group) previews.push({ text: group.join(" · "), settled: false });
-  return previews;
-}
 
 type AssistantPreviewRow = AssistantRowDataLike & { contentContainer?: { children?: unknown[] } };
 type ThinkingRegion = {
@@ -123,8 +70,44 @@ export function installThinkingPreviews(comp: AssistantPreviewRow): void {
     .map((region) => region as unknown as ThinkingRegion);
   let previews: RunPreview[] | undefined;
   if (regions.some((region) => region.child instanceof Text)) {
-    previews = thinkingPreviews(comp);
-    if (!previews || regions.length !== previews.length) return;
+    const content = comp.lastMessage?.content;
+    if (!Array.isArray(content)) return;
+    previews = [];
+    let group: string[] | undefined;
+    for (const block of content) {
+      if (isJsonObject(block) && block.type === "thinking") {
+        // Non-empty thinking blocks extend the current group; empty ones leave it open,
+        // matching the previous accumulation semantics.
+        if (typeof block.thinking === "string" && block.thinking.trim()) {
+          const source = block.thinking;
+          const cached = blockPreviewCache.get(block);
+          let preview: string;
+          if (cached && cached.source === source) preview = cached.preview;
+          else {
+            const fragments: string[] = [];
+            for (const line of source.split(/\r\n|\r|\n/)) {
+              const markdown = stripAnsi(line)
+                .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
+                .replace(/\s+/g, " ")
+                .trim();
+              if (!markdown) continue;
+              const rendered = new Markdown(markdown, 0, 0, plainMarkdownTheme).render(PREVIEW_RENDER_WIDTH);
+              const first = rendered.find((line) => stripAnsi(line).trim().length > 0);
+              const fragment = first ? stripAnsi(first).replace(/\s+/g, " ").trim() : markdown;
+              if (fragment) fragments.push(fragment);
+            }
+            preview = fragments.join(" · ");
+            blockPreviewCache.set(block, { source, preview });
+          }
+          (group ??= []).push(preview);
+        }
+        continue;
+      }
+      if (group) previews.push({ text: group.join(" · "), settled: true });
+      group = undefined;
+    }
+    if (group) previews.push({ text: group.join(" · "), settled: false });
+    if (regions.length !== previews.length) return;
   }
 
   for (let i = 0; i < regions.length; i++) {
@@ -149,7 +132,13 @@ export function installThinkingPreviews(comp: AssistantPreviewRow): void {
         const cut = visibleWidth(replaceVisibleLabel(line, preview.text, Number.POSITIVE_INFINITY)) > width;
         const gist = cut ? gistFor("thinking", preview.text, preview.settled) : undefined;
         if (last?.width !== width || last.line !== line || last.gist !== gist) {
-          last = { width, line, gist, lines: gist ? gistLabelLines(line, gist, width) : [replaceVisibleLabel(line, preview.text, width)] };
+          let labelLines: string[];
+          if (gist) {
+            // A gist wraps under the label's first word, in its ink, never cut (§9.15).
+            const { open, close, indent } = labelFrame(line);
+            labelLines = wrapTextWithAnsi(gist, Math.max(1, width - indent - 2)).map((text, i) => `${open}${i ? "  " : "≈ "}${text}${close}`);
+          } else labelLines = [replaceVisibleLabel(line, preview.text, width)];
+          last = { width, line, gist, lines: labelLines };
         }
         return last.lines;
       },

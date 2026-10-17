@@ -15,10 +15,6 @@ export type ToolDefinition = {
 
 // --- JSON schema readers shared by the tool estimators -----------------------------------
 
-function trimFinalPeriod(text: string): string {
-  return text.endsWith(".") ? text.slice(0, -1) : text;
-}
-
 export function getSchemaProperties(schema: unknown): Record<string, unknown> {
   if (!isJsonObject(schema) || !isJsonObject(schema.properties)) return {};
   return schema.properties;
@@ -36,7 +32,8 @@ export function schemaPropertyType(property: unknown): string {
 
 export function schemaPropertyDescription(property: unknown): string {
   if (!isJsonObject(property)) return "";
-  return typeof property.description === "string" ? trimFinalPeriod(property.description) : "";
+  const description = typeof property.description === "string" ? property.description : "";
+  return description.endsWith(".") ? description.slice(0, -1) : description;
 }
 
 export function getSchemaRequired(schema: unknown): string[] {
@@ -44,29 +41,7 @@ export function getSchemaRequired(schema: unknown): string[] {
   return schema.required.filter((entry): entry is string => typeof entry === "string");
 }
 
-export function arrayItemsSchema(property: unknown): unknown {
-  return isJsonObject(property) ? property.items : undefined;
-}
-
-export function safeMinifiedJson(value: unknown): string {
-  try {
-    return JSON.stringify(value) ?? "undefined";
-  } catch (error) {
-    return `[unserializable: ${error instanceof Error ? error.message : String(error)}]`;
-  }
-}
-
 // --- provider tool payload formats ---------------------------------------------------------
-
-export function openAIResponsesToolPayload(tool: ToolDefinition): unknown {
-  return {
-    type: "function",
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.schema,
-    strict: null,
-  };
-}
 
 /** `format` is a `toolNumerator` name; `openai-cookbook` and unknown names take the
  * OpenAI Responses payload. */
@@ -108,7 +83,13 @@ export function toolPayload(tool: ToolDefinition & { promptGuidelines?: string[]
         promptGuidelines: tool.promptGuidelines ?? [],
       };
     default:
-      return openAIResponsesToolPayload(tool);
+      return {
+        type: "function",
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.schema,
+        strict: null,
+      };
   }
 }
 
@@ -240,6 +221,12 @@ export function estimateToolListTokens(
 ): number {
   if (tools.length === 0) return 0;
   if (heuristic.toolNumerator === "openai-cookbook") return estimateOpenAIFunctionToolTokens(tools);
-  const content = safeMinifiedJson(aggregateToolPayload(tools, heuristic.toolNumerator));
+  const payload = aggregateToolPayload(tools, heuristic.toolNumerator);
+  let content: string;
+  try {
+    content = JSON.stringify(payload) ?? "undefined";
+  } catch (error) {
+    content = `[unserializable: ${error instanceof Error ? error.message : String(error)}]`;
+  }
   return estimateCharsAsTokens(content.length, heuristic.toolDenominator);
 }

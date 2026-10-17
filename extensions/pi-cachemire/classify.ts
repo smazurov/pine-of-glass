@@ -4,7 +4,7 @@
 // the wording rules live in the design language (§7) and render.ts speaks them.
 
 import { createHash } from "node:crypto";
-import { isJsonObject } from "../_lib/boundary.ts";
+import { isJsonObject, stringValue } from "../_lib/boundary.ts";
 import { formatDuration } from "../_lib/fmt.ts";
 import type {
   CacheWindow,
@@ -78,25 +78,6 @@ function hashOf(value: unknown): string {
   return createHash("sha1").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
 
-function findTtlMs(payload: Record<string, unknown>): number | undefined {
-  const candidates: unknown[] = [];
-  const system = payload.system;
-  if (Array.isArray(system)) candidates.push(...system);
-  const tools = payload.tools;
-  if (Array.isArray(tools)) candidates.push(...tools);
-  const messages = payload.messages;
-  if (Array.isArray(messages)) {
-    for (const message of messages as Array<{ content?: unknown }>) {
-      if (Array.isArray(message?.content)) candidates.push(...message.content);
-    }
-  }
-  for (const block of candidates) {
-    const control = (block as { cache_control?: { type?: string; ttl?: string } })?.cache_control;
-    if (control?.type === "ephemeral") return control.ttl === "1h" ? TTL_LONG_MS : TTL_SHORT_MS;
-  }
-  return undefined;
-}
-
 export function fingerprintPayload(
   payload: unknown,
   route?: ThinkingRoute,
@@ -104,17 +85,19 @@ export function fingerprintPayload(
   const body = isJsonObject(payload) ? payload : {};
   if (Array.isArray(body.input) || typeof body.instructions === "string") {
     const tools = Array.isArray(body.tools) ? body.tools : [];
+    const reasoning = isJsonObject(body.reasoning) ? body.reasoning : undefined;
     return {
       kind: "openai-responses",
       model: typeof body.model === "string" ? body.model : undefined,
       systemHash: body.instructions !== undefined ? hashOf(body.instructions) : undefined,
       toolHashes: tools.map((tool) => {
-        const t = tool as { name?: string; function?: { name?: string } };
-        return { name: t.name ?? t.function?.name ?? "?", hash: hashOf(tool) };
+        const t = isJsonObject(tool) ? tool : {};
+        const fn = isJsonObject(t.function) ? t.function : undefined;
+        return { name: stringValue(t.name) ?? stringValue(fn?.name) ?? "?", hash: hashOf(tool) };
       }),
       messageHashes: (Array.isArray(body.input) ? body.input : []).map((item) => hashOf(item)),
       ttlMs: undefined,
-      thinking: `effort ${(body.reasoning as { effort?: string } | undefined)?.effort ?? "default"}`,
+      thinking: `effort ${stringValue(reasoning?.effort) ?? "default"}`,
     };
   }
   if (Array.isArray(body.messages)) {
@@ -138,6 +121,33 @@ export function fingerprintPayload(
     const additional = isJsonObject(body.additionalModelRequestFields)
       ? body.additionalModelRequestFields
       : undefined;
+    // Pi sends budget, adaptive-effort, or disabled thinking on this wire.
+    const thinkingValue = body.thinking ?? additional?.thinking;
+    const thinking = isJsonObject(thinkingValue) ? thinkingValue : undefined;
+    const outputValue = body.output_config ?? additional?.output_config;
+    const output = isJsonObject(outputValue) ? outputValue : undefined;
+    const effort = stringValue(output?.effort);
+    const budget = thinking?.budget_tokens;
+    const thinkingDescription = thinking?.type === "enabled"
+      ? `thinking budget ${typeof budget === "number" ? budget : "?"}`
+      : thinking?.type === "adaptive"
+        ? effort ? `thinking effort ${effort}` : "thinking adaptive"
+        : "thinking off";
+    let ttlMs: number | undefined;
+    const candidates: unknown[] = [];
+    const system = body.system;
+    if (Array.isArray(system)) candidates.push(...system);
+    if (Array.isArray(body.tools)) candidates.push(...body.tools);
+    for (const message of messages) {
+      if (isJsonObject(message) && Array.isArray(message.content)) candidates.push(...message.content);
+    }
+    for (const block of candidates) {
+      const control = isJsonObject(block) && isJsonObject(block.cache_control) ? block.cache_control : undefined;
+      if (control?.type === "ephemeral") {
+        ttlMs = control.ttl === "1h" ? TTL_LONG_MS : TTL_SHORT_MS;
+        break;
+      }
+    }
     return {
       kind: "anthropic",
       model: typeof body.model === "string"
@@ -145,34 +155,18 @@ export function fingerprintPayload(
         : typeof body.modelId === "string" ? body.modelId : undefined,
       systemHash: body.system !== undefined ? hashOf(stripCacheMarkers(body.system)) : undefined,
       toolHashes: tools.map((tool) => {
-        const value = tool as { name?: string; toolSpec?: { name?: string } };
-        return { name: value.name ?? value.toolSpec?.name ?? "?", hash: hashOf(stripCacheMarkers(tool)) };
+        const value = isJsonObject(tool) ? tool : {};
+        const spec = isJsonObject(value.toolSpec) ? value.toolSpec : undefined;
+        return { name: stringValue(value.name) ?? stringValue(spec?.name) ?? "?", hash: hashOf(stripCacheMarkers(tool)) };
       }),
       messageHashes: messages.map((message) => hashOf(stripCacheMarkers(message))),
       cachedMessageCount,
-      ttlMs: findTtlMs(body),
-      thinking: describeAnthropicThinking(
-        body.thinking ?? additional?.thinking,
-        body.output_config ?? additional?.output_config,
-      ),
+      ttlMs,
+      thinking: thinkingDescription,
       thinkingCacheNeutral: thinkingChangesPreserveCache(route) ? true : undefined,
     };
   }
   return { kind: "unknown", toolHashes: [], messageHashes: [] };
-}
-
-// pi-ai puts thinking on the anthropic wire three ways: budget models get
-// thinking:{type:"enabled",budget_tokens}, adaptive models (forceAdaptiveThinking) get
-// thinking:{type:"adaptive"} plus output_config:{effort}, and off is {type:"disabled"}
-// or absent. All three must be told apart, or effort changes diff as no-ops.
-function describeAnthropicThinking(thinking: unknown, outputConfig: unknown): string {
-  const t = thinking as { type?: string; budget_tokens?: number } | undefined;
-  if (t?.type === "enabled") return `thinking budget ${t.budget_tokens ?? "?"}`;
-  if (t?.type === "adaptive") {
-    const effort = (outputConfig as { effort?: string } | undefined)?.effort;
-    return effort ? `thinking effort ${effort}` : "thinking adaptive";
-  }
-  return "thinking off";
 }
 
 function isEffortThinking(value: string | undefined): boolean {
@@ -273,7 +267,7 @@ export function classifyCall(args: ClassifyInput): CallClassification {
   const ratio = expected > 0 ? args.usage.cacheRead / expected : 0;
   if (ratio >= HIT_RATIO) return { kind: "hit" };
 
-  let cause: CallCause | undefined;
+  let cause: CallCause;
   const idleCause = expiryCause(args.window, args.gapMs);
   if (args.compacted) {
     cause = { kind: "compaction", detail: "compaction rewrote history" };

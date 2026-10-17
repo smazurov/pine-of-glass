@@ -21,18 +21,12 @@ import {
   summarizeCounts,
   vertexCountRequest,
 } from "../../scripts/contextimate/provider-token-counts.ts";
-import { isJsonObject, type JsonObject } from "../../extensions/_lib/boundary.ts";
-import { toolPayload } from "../../extensions/_lib/tool-payloads.ts";
-import { buildSnapshot } from "../../extensions/pi-contextimate/snapshot.ts";
-import { anthropicModel, fakePi, fixtureSystemPrompt } from "../helpers.ts";
+import { fixtureSystemPrompt } from "../helpers.ts";
 
 function capturedAnthropicPayload() {
-  const snapshot = buildSnapshot(fakePi(), { systemPrompt: fixtureSystemPrompt(), model: anthropicModel });
-  const tools = snapshot.tools.slice(0, 3).map((tool) => {
-    const payload = toolPayload(tool, "anthropic");
-    assert.ok(isJsonObject(payload));
-    return payload as JsonObject;
-  });
+  const tools = ["read", "bash", "search"].map((name) => ({
+    name, description: `The ${name} tool`, input_schema: { type: "object" },
+  }));
   return {
     model: "claude-opus-4-8",
     max_tokens: 8192,
@@ -223,21 +217,18 @@ test("Cohere executor calls the tokenizer API", async (t) => {
 });
 
 test("summary removes the shared tool-block overhead", () => {
-  const requests = buildAnthropicRequests(capturedAnthropicPayload());
-  const counts = {
-    baseline: 10,
-    system: 110,
-    tools: 410,
-    "tool:read": 210,
-    "tool:bash": 220,
-    "tool:search": 230,
-    full: 510,
-  };
-  const summary = summarizeCounts(requests, counts);
+  const summary = summarizeCounts([
+    { id: "baseline", label: "baseline", tokens: 10 },
+    { id: "system", label: "system", tokens: 110, chars: 400 },
+    { id: "tools", label: "all tools", tokens: 410 },
+    { id: "tool:read", label: "read", tokens: 210 },
+    { id: "tool:bash", label: "bash", tokens: 220 },
+    { id: "tool:search", label: "search", tokens: 230 },
+    { id: "full", label: "full", tokens: 510 },
+  ]);
   const rows = rowsById(summary.rows);
   assert.equal(summary.toolOverhead, 115);
   assert.equal(rows["tool:read"].netTokens, 85);
   assert.equal(rows.tools.netTokens, 285);
-  assert.ok(rows.system.chars !== undefined);
-  assert.equal(summary.suggestedHeuristic.textDenominator, Number((rows.system.chars / 100).toFixed(2)));
+  assert.equal(summary.suggestedHeuristic.textDenominator, 4);
 });

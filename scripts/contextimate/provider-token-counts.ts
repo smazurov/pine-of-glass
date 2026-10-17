@@ -13,12 +13,16 @@ export type BuildOptions = {
   tools?: string[];
 };
 
-export type CountRequest = {
+export type CountRequest<Body extends JsonObject = JsonObject> = {
   id: string;
   label: string;
-  body: JsonObject;
+  body: Body;
   chars?: number;
 };
+
+export type CountMeasurement = Omit<CountRequest, "body"> & { tokens: number };
+type GoogleRequest = JsonObject & { model: string; contents: JsonValue[] };
+type GoogleCountRequest = CountRequest<{ generateContentRequest: GoogleRequest }>;
 
 export type CountSummary = {
   rows: Array<{
@@ -93,11 +97,11 @@ function textChars(value: JsonValue): number {
   return visibleText(value).length;
 }
 
-function toolRequests(
+function toolRequests<Body extends JsonObject>(
   tools: JsonValue[],
-  body: (tools: JsonValue[]) => JsonObject,
+  body: (tools: JsonValue[]) => Body,
   chars: (tools: JsonValue[]) => number = jsonChars,
-): CountRequest[] {
+): CountRequest<Body>[] {
   if (tools.length === 0) return [];
   return [
     { id: "tools", label: `all tools (${tools.length})`, body: body(tools), chars: chars(tools) },
@@ -157,15 +161,11 @@ export function buildAnthropicFullRequest(payload: JsonObject, options: BuildOpt
   return { id: "captured", label: "captured request", body };
 }
 
-function openAISystemItems(payload: JsonObject): JsonValue[] {
-  return requireArray(payload, "input").filter(
-    (item) => isJsonObject(item) && (item.role === "system" || item.role === "developer"),
-  );
-}
-
 export function buildOpenAIRequests(payload: JsonObject, options: BuildOptions = {}): CountRequest[] {
   const model = modelId(payload, options.model);
-  const system = openAISystemItems(payload);
+  const system = requireArray(payload, "input").filter(
+    (item) => isJsonObject(item) && (item.role === "system" || item.role === "developer"),
+  );
   const tools = selectTools(payload.tools, options.tools);
   const baseline = { model, input: MINIMAL_RESPONSES_INPUT };
   const requests: CountRequest[] = [{ id: "baseline", label: "baseline", body: baseline }];
@@ -195,10 +195,10 @@ function googleRequest(
   system?: JsonValue,
   tools?: JsonValue[],
   includeGenerationConfig = false,
-): JsonObject {
+): GoogleRequest {
   const config = isJsonObject(payload.config) ? payload.config : {};
   const model = modelId(payload, modelOverride).replace(/^models\//, "");
-  const request: JsonObject = {
+  const request: GoogleRequest = {
     model: `models/${model}`,
     contents,
     ...(system !== undefined && { systemInstruction: system }),
@@ -212,7 +212,7 @@ function googleRequest(
   return request;
 }
 
-export function buildGoogleRequests(payload: JsonObject, options: BuildOptions = {}): CountRequest[] {
+export function buildGoogleRequests(payload: JsonObject, options: BuildOptions = {}): GoogleCountRequest[] {
   const config = isJsonObject(payload.config) ? payload.config : {};
   const declarations = Array.isArray(config.tools)
     ? config.tools.flatMap((tool) => isJsonObject(tool) && Array.isArray(tool.functionDeclarations) ? tool.functionDeclarations : [])
@@ -220,7 +220,7 @@ export function buildGoogleRequests(payload: JsonObject, options: BuildOptions =
   const tools = selectTools(declarations, options.tools);
   const wrapTools = (selected: JsonValue[]): JsonValue[] => [{ functionDeclarations: selected }];
   const baseline = googleRequest(payload, MINIMAL_GOOGLE_CONTENTS, options.model);
-  const requests: CountRequest[] = [{ id: "baseline", label: "baseline", body: { generateContentRequest: baseline } }];
+  const requests: GoogleCountRequest[] = [{ id: "baseline", label: "baseline", body: { generateContentRequest: baseline } }];
   if (config.systemInstruction !== undefined) {
     requests.push({
       id: "system",
@@ -246,7 +246,7 @@ export function buildGoogleRequests(payload: JsonObject, options: BuildOptions =
   return requests;
 }
 
-export function buildGoogleFullRequest(payload: JsonObject, options: BuildOptions = {}): CountRequest {
+export function buildGoogleFullRequest(payload: JsonObject, options: BuildOptions = {}): GoogleCountRequest {
   const config = isJsonObject(payload.config) ? payload.config : {};
   return {
     id: "captured",
@@ -264,19 +264,13 @@ export function buildGoogleFullRequest(payload: JsonObject, options: BuildOption
   };
 }
 
-export function buildVertexRequests(payload: JsonObject, options: BuildOptions = {}): CountRequest[] {
-  return buildGoogleRequests(payload, options).map((request) => ({
-    ...request,
-    body: isJsonObject(request.body.generateContentRequest) ? request.body.generateContentRequest : request.body,
-  }));
+export function buildVertexRequests(payload: JsonObject, options: BuildOptions = {}): CountRequest<GoogleRequest>[] {
+  return buildGoogleRequests(payload, options).map(({ body, ...request }) => ({ ...request, body: body.generateContentRequest }));
 }
 
-export function buildVertexFullRequest(payload: JsonObject, options: BuildOptions = {}): CountRequest {
-  const request = buildGoogleFullRequest(payload, options);
-  return {
-    ...request,
-    body: isJsonObject(request.body.generateContentRequest) ? request.body.generateContentRequest : request.body,
-  };
+export function buildVertexFullRequest(payload: JsonObject, options: BuildOptions = {}): CountRequest<GoogleRequest> {
+  const { body, ...request } = buildGoogleFullRequest(payload, options);
+  return { ...request, body: body.generateContentRequest };
 }
 
 export function buildBedrockRequests(payload: JsonObject, options: BuildOptions = {}): CountRequest[] {
@@ -363,14 +357,14 @@ export function buildZaiRequests(payload: JsonObject, options: BuildOptions = {}
   return requests;
 }
 
-export function summarizeCounts(requests: CountRequest[], counts: Record<string, number>): CountSummary {
-  const baseline = counts.baseline ?? 0;
-  const individualTools = requests.filter((request) => request.id.startsWith("tool:"));
-  const toolOverhead = individualTools.length >= 2 && counts.tools !== undefined
-    ? Math.max(0, Math.round((individualTools.reduce((sum, request) => sum + counts[request.id] - baseline, 0) - (counts.tools - baseline)) / (individualTools.length - 1)))
+export function summarizeCounts(measurements: CountMeasurement[]): CountSummary {
+  const baseline = measurements.find((row) => row.id === "baseline")?.tokens ?? 0;
+  const individualTools = measurements.filter((row) => row.id.startsWith("tool:"));
+  const allTools = measurements.find((row) => row.id === "tools");
+  const toolOverhead = individualTools.length >= 2 && allTools
+    ? Math.max(0, Math.round((individualTools.reduce((sum, row) => sum + row.tokens - baseline, 0) - (allTools.tokens - baseline)) / (individualTools.length - 1)))
     : undefined;
-  const rows = requests.map(({ id, label, chars }) => {
-    const tokens = counts[id];
+  const rows = measurements.map(({ id, label, chars, tokens }) => {
     const marginal = id === "baseline" ? undefined : tokens - baseline;
     const netTokens = marginal !== undefined && toolOverhead !== undefined && id.startsWith("tool")
       ? Math.max(0, marginal - toolOverhead)
@@ -408,21 +402,6 @@ function requiredEnv(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`set ${name} before using --live`);
   return value;
-}
-
-function anthropicHeaders(): Record<string, string> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (apiKey) return { "x-api-key": apiKey, "anthropic-version": "2023-06-01" };
-  try {
-    const auth: unknown = JSON.parse(readFileSync(join(homedir(), ".pi", "agent", "auth.json"), "utf8"));
-    const entry = isJsonObject(auth) && isJsonObject(auth.anthropic) ? auth.anthropic : undefined;
-    if (entry && typeof entry.access === "string" && (typeof entry.expires !== "number" || entry.expires > Date.now())) {
-      return { authorization: `Bearer ${entry.access}`, "anthropic-version": "2023-06-01", "anthropic-beta": "oauth-2025-04-20" };
-    }
-  } catch {
-    // The credential error below is more useful than a missing or malformed local auth-file error.
-  }
-  throw new Error("set ANTHROPIC_API_KEY or refresh the Anthropic login in Pi");
 }
 
 function numberField(data: unknown, key: string, provider: string): number {
@@ -465,7 +444,22 @@ export const PROVIDERS: Record<string, Provider> = {
     build: buildAnthropicRequests,
     full: buildAnthropicFullRequest,
     async execute(body) {
-      const data = await postJson("https://api.anthropic.com/v1/messages/count_tokens", body, anthropicHeaders());
+      const apiKey = process.env.ANTHROPIC_API_KEY;
+      let headers: Record<string, string> | undefined;
+      if (apiKey) headers = { "x-api-key": apiKey, "anthropic-version": "2023-06-01" };
+      else {
+        try {
+          const auth: unknown = JSON.parse(readFileSync(join(homedir(), ".pi", "agent", "auth.json"), "utf8"));
+          const entry = isJsonObject(auth) && isJsonObject(auth.anthropic) ? auth.anthropic : undefined;
+          if (entry && typeof entry.access === "string" && (typeof entry.expires !== "number" || entry.expires > Date.now())) {
+            headers = { authorization: `Bearer ${entry.access}`, "anthropic-version": "2023-06-01", "anthropic-beta": "oauth-2025-04-20" };
+          }
+        } catch {
+          // The credential error below is more useful than a missing or malformed local auth-file error.
+        }
+      }
+      if (!headers) throw new Error("set ANTHROPIC_API_KEY or refresh the Anthropic login in Pi");
+      const data = await postJson("https://api.anthropic.com/v1/messages/count_tokens", body, headers);
       return numberField(data, "input_tokens", "Anthropic");
     },
   },

@@ -98,19 +98,9 @@ export function drillDecorateNativeRow(theme: Theme | undefined, comp: unknown, 
 
 // --- mode lifecycle --------------------------------------------------------------------
 
-function collectTargets(host: DrillHost): ToolRowLike[] {
-  const sibs = host.chatChildren() ?? [];
-  const rows: ToolRowLike[] = [];
-  for (let i = sibs.length - 1; i >= 0; i--) {
-    const c = sibs[i];
-    if (isToolRow(c) && !host.hiddenByFold(c)) rows.push(c);
-  }
-  return rows;
-}
-
 export function enterDrillMode(host: DrillHost): void {
   if (g.__tracelineDrill) return;
-  const rows = collectTargets(host);
+  const rows = (host.chatChildren() ?? []).filter(isToolRow).filter((row) => !host.hiddenByFold(row)).reverse();
   if (rows.length === 0) {
     host.ui.notify("traceline: no tool rows to drill into", "info");
     return;
@@ -118,7 +108,7 @@ export function enterDrillMode(host: DrillHost): void {
   const st: DrillState = {
     host,
     rows,
-    numbers: new Map(rows.map((row, i) => [row as unknown, i + 1])),
+    numbers: new Map(rows.map((row, i) => [row, i + 1])),
     selected: 0,
     digits: "",
   };
@@ -193,21 +183,6 @@ export function applyDigit(st: DrillState, ch: string): number | undefined {
   return step.commit;
 }
 
-/** Commit whatever the buffer holds (enter); returns the number, if valid. */
-export function commitDigits(st: DrillState): number | undefined {
-  const n = Number(st.digits);
-  st.digits = "";
-  if (!Number.isInteger(n) || n < 1 || n > st.rows.length) return undefined;
-  st.selected = clampIndex(st, n - 1);
-  st.host.requestRender();
-  return n;
-}
-
-function typedDigit(data: string): string | undefined {
-  for (let d = 0; d <= 9; d++) if (matchesKey(data, String(d) as KeyId)) return String(d);
-  return undefined;
-}
-
 // --- the hint bar (replaces the editor while the mode is active) -----------------------
 
 export function openPager(st: DrillState): void {
@@ -263,7 +238,14 @@ class DrillHintBar implements Component {
       return;
     }
     if (matchesKey(data, "enter")) {
-      if (st.digits) commitDigits(st);
+      if (st.digits) {
+        const n = Number(st.digits);
+        st.digits = "";
+        if (Number.isInteger(n) && n >= 1 && n <= st.rows.length) {
+          st.selected = clampIndex(st, n - 1);
+          st.host.requestRender();
+        }
+      }
       openPager(st);
       return;
     }
@@ -275,7 +257,11 @@ class DrillHintBar implements Component {
     if (matchesKey(data, "up") || matchesKey(data, "k")) return setSelected(st, st.selected + 1); // up = older
     if (matchesKey(data, "down") || matchesKey(data, "j")) return setSelected(st, st.selected - 1);
     if (matchesKey(data, "p")) return togglePin(st);
-    const digit = typedDigit(data);
+    let digit: string | undefined;
+    for (let d = 0; d <= 9; d++) {
+      // SAFETY: this bounded loop produces only digit keys, all valid Pi KeyId values.
+      if (matchesKey(data, String(d) as KeyId)) { digit = String(d); break; }
+    }
     if (digit !== undefined && applyDigit(st, digit) !== undefined) openPager(st);
   }
 
