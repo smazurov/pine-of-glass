@@ -4,9 +4,10 @@
 // top-level bash row (index.ts) and the composed ledger (ledger.ts).
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { ink, type Tone } from "../_lib/style.ts";
+import { ink, tildify, type Tone } from "../_lib/style.ts";
 import { bashCrownedHeads, type BashHead } from "./bash-crowns.ts";
-import { fitCompoundCommand, wrapCompoundCommand, type FitPiece } from "./compound-fit.ts";
+import { fitCompoundCommand, wrapCompoundCommand, type FitHead, type FitPiece } from "./compound-fit.ts";
+import { commandKey, readShell } from "./record-shell.ts";
 
 const BOLD = "\x1b[1m";
 const BOLD_OFF = "\x1b[22m";
@@ -42,14 +43,35 @@ export type BashLines = { first: string; continuations: string[]; overflow: bool
  * renders whole. One that overflows fits by command; when that would starve a command
  * and `contBudget` is given, it wraps at command boundaries instead, continuation
  * lines taking `contBudget` columns each. A body nothing can fit is returned whole for
- * the caller's single middle cut.
+ * the caller's single middle cut. `earned`: keys of the commands that earned the row's
+ * records, which are never cut below the floor.
  */
-export function fitBashLines(theme: Theme | undefined, tone: Tone, body: string, budget: number, contBudget?: number): BashLines {
+export function fitBashLines(theme: Theme | undefined, tone: Tone, body: string, budget: number, contBudget?: number, earned: readonly string[] = []): BashLines {
   const crowns = bashCrownedHeads(body);
   const whole: FitPiece[] = [{ start: 0, end: body.length }];
-  const fit = body.length > budget ? fitCompoundCommand(body, crowns, budget) : undefined;
+  let heads: FitHead[] = crowns;
+  if (body.length > budget && earned.length > 0) {
+    // Display-only normalization: raw record identities and the tildified body must
+    // agree. Restore newlines and blank a folded preamble without moving offsets.
+    const script = readShell(body.replaceAll("\u21b5", "\n").replace(/^\u22ef(?=\s)/, " "));
+    const identities = new Set(earned.map(tildify));
+    heads = [...crowns];
+    for (const command of [...script.commands, ...script.nested]) {
+      if (!identities.has(tildify(commandKey(command)))) continue;
+      const { start, end } = command.head;
+      const commandEnd = command.args.at(-1)?.end ?? end;
+      // A fitting boundary is not a crown. Start protection at the producer, not
+      // at an earlier rg or env whose slice happens to contain it. A conservative
+      // crown inside this command (unquoted `PR_URL=$(gh …)` crowns `pr`) is replaced
+      // only for fitting; inkPieces still uses the original whole-body crowns.
+      heads = heads.filter((head) => head.start < start || head.start >= commandEnd);
+      heads.push({ start, end, earned: true });
+    }
+    heads.sort((a, b) => a.start - b.start);
+  }
+  const fit = body.length > budget ? fitCompoundCommand(body, heads, budget) : undefined;
   const wrapped = contBudget !== undefined && body.length > budget && (!fit || fit.starved)
-    ? wrapCompoundCommand(body, crowns, budget, contBudget)
+    ? wrapCompoundCommand(body, heads, budget, contBudget)
     : undefined;
   const [first, ...continuations] = (wrapped ?? [fit?.pieces ?? whole]).map((pieces) => inkPieces(theme, tone, body, crowns, pieces));
   return { first: first!, continuations, overflow: visibleWidth(body) > budget };
