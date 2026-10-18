@@ -7,6 +7,7 @@ import type { ToolRowLike } from "../../extensions/_lib/chat.ts";
 import { internals as trace } from "../../extensions/pi-traceline/index.ts";
 import { mouseViewport } from "../fixtures/mouse-viewport.ts";
 import { isRevealed, resetRevealedFolds, type TraceMousePrototype } from "../../extensions/pi-traceline/click.ts";
+import { handleThinkingToggleTerminalInput } from "../../extensions/pi-traceline/thinking-toggle.ts";
 import { assistantBefore } from "../traceline/runtime-fixtures.ts";
 
 initTheme(undefined, false);
@@ -77,6 +78,22 @@ test("aggregate click reveals members first; glyph refolds the snapshot", () => 
   clickLine(c, "a.txt", 4);
   assert.equal(seam(b).expanded, false);
   assert.ok(painted(c).some((line) => line.includes("2 calls")));
+});
+
+test("Ctrl+T collapses clicked rows; revealed groups stay revealed", () => {
+  const solo = row("lookup", "/solo/x.txt"), a = row("read", "/src/a.txt"), b = row("read", "/src/b.txt");
+  const c = chat([solo, a, b]);
+  clickLine(c, "2 calls");
+  const revealed = painted(c);
+  clickLine(c, "x.txt");
+  clickLine(c, "b.txt");
+  assert.equal(seam(solo).expanded, true);
+  assert.equal(seam(b).expanded, true);
+  handleThinkingToggleTerminalInput("\x14", { getToolsExpanded: () => false, setToolsExpanded() {} }, () => c.children);
+  assert.equal(seam(solo).expanded, false);
+  assert.equal(seam(b).expanded, false);
+  assert.ok(isRevealed(seam(a)) && isRevealed(seam(b)));
+  assert.deepEqual(painted(c), revealed);
 });
 
 test("same-file reads and repeated tool calls also reveal before expansion", () => {
