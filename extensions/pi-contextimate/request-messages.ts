@@ -64,17 +64,24 @@ export async function payloadTextAdditions(saved: AgentMessage[], payload: unkno
       }
     }
   }
-  // Bundled Pi may expose only virtual modules, without resolvable file paths.
-  // Fall back to context-hook accounting when native normalization is unavailable.
   normalization ??= (async () => {
-    const dist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-ai")));
+    let root: string;
+    try {
+      root = import.meta.resolve("@earendil-works/pi-ai");
+    } catch (error) {
+      // Bundled Pi may expose only a virtual root. Other failures must surface.
+      if (error instanceof Error && "code" in error
+        && (error.code === "MODULE_NOT_FOUND" || error.code === "ERR_MODULE_NOT_FOUND")) return undefined;
+      throw error;
+    }
+    const dist = dirname(fileURLToPath(root));
     // SAFETY: public Pi AI exports, exercised by native-converter regression tests.
     // File URLs bypass Pi 0.86's prefix alias, which misresolves package subpaths.
     const messages = await import(pathToFileURL(join(dist, "api/transform-messages.js")).href) as typeof import("@earendil-works/pi-ai/api/transform-messages");
     // SAFETY: paired public Pi AI sanitizer, pinned by the same native-converter tests.
     const unicode = await import(pathToFileURL(join(dist, "utils/sanitize-unicode.js")).href) as typeof import("@earendil-works/pi-ai/utils/sanitize-unicode");
     return { transformMessages: messages.transformMessages, sanitizeSurrogates: unicode.sanitizeSurrogates };
-  })().catch(() => undefined);
+  })();
   const native = await normalization;
   if (!native) return undefined;
   const expected = conversationText(native.transformMessages(messages, model), model)

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-responses-shared";
@@ -70,34 +70,55 @@ test("native Anthropic unsigned thinking is not counted a second time", async ()
   assert.deepEqual(await payloadTextAdditions(history, payload, model), { chars: 0, additive: true });
 });
 
-test("bundled Pi skips unavailable native attribution without rejecting subsequent requests", async () => {
-  const project = new IsolatedProject();
-  try {
-    // Keep the extension outside node_modules so installed dev peers cannot mask #181.
-    cpSync(new URL("../../extensions", import.meta.url), join(project.dir, "extensions"), { recursive: true });
-    const probe = join(project.dir, "probe.ts");
-    writeFileSync(probe, `
-      import assert from "node:assert/strict";
-      import { payloadTextAdditions } from "./extensions/pi-contextimate/request-messages.ts";
-      export default async function () {
-        for (const api of ["openai-responses", "openai-codex-responses", "azure-openai-responses", "anthropic-messages"]) {
-          for (let turn = 0; turn < 2; turn++) {
-            assert.equal(await payloadTextAdditions([], { input: [], messages: [] }, { api }), undefined);
-          }
+test("bundled Pi skips a missing root package but reports helper-loading failures", async (t) => {
+  for (const [name, helper, expectedError] of [
+    ["virtual-only pi-ai", undefined, undefined],
+    ["helper initialization error", 'throw new Error("fixture helper failed");', /fixture helper failed/],
+    ["missing helper dependency", 'import "./missing-helper.js";', /missing-helper/],
+  ] as const) {
+    await t.test(name, async () => {
+      const project = new IsolatedProject();
+      try {
+        // Keep the extension outside node_modules so installed dev peers cannot mask #181.
+        cpSync(new URL("../../extensions", import.meta.url), join(project.dir, "extensions"), { recursive: true });
+        if (helper !== undefined) {
+          const pkg = join(project.dir, "node_modules/@earendil-works/pi-ai");
+          mkdirSync(join(pkg, "api"), { recursive: true });
+          writeFileSync(join(pkg, "package.json"), '{"type":"module","main":"./index.js"}');
+          writeFileSync(join(pkg, "index.js"), "export {};");
+          writeFileSync(join(pkg, "api/transform-messages.js"), helper);
         }
-      }
-    `);
-    // SAFETY: the packaged bundle exposes the same SDK; unlike the unbundled entry,
-    // its real extension loader uses virtual modules, the runtime seam behind #181.
-    const { DefaultResourceLoader, SettingsManager } = await import(
-      new URL("./bundle/index.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href
-    ) as typeof import("@earendil-works/pi-coding-agent");
-    const loader = new DefaultResourceLoader({ cwd: project.dir, agentDir: project.home,
-      settingsManager: SettingsManager.inMemory({ packages: [] }), additionalExtensionPaths: [probe] });
-    await loader.reload();
-    assert.deepEqual(loader.getExtensions().errors, []);
-    assert.equal(loader.getExtensions().extensions.length, 1);
-  } finally { project.dispose(); }
+        const probe = join(project.dir, "probe.ts");
+        writeFileSync(probe, `
+          import assert from "node:assert/strict";
+          import { payloadTextAdditions } from "./extensions/pi-contextimate/request-messages.ts";
+          export default async function () {
+            for (const api of ["openai-responses", "openai-codex-responses", "azure-openai-responses", "anthropic-messages"]) {
+              for (let turn = 0; turn < 2; turn++) {
+                assert.equal(await payloadTextAdditions([], { input: [], messages: [] }, { api }), undefined);
+              }
+            }
+          }
+        `);
+        // SAFETY: the packaged bundle exposes the same SDK; unlike the unbundled entry,
+        // its real extension loader uses virtual modules, the runtime seam behind #181.
+        const { DefaultResourceLoader, SettingsManager } = await import(
+          new URL("./bundle/index.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href
+        ) as typeof import("@earendil-works/pi-coding-agent");
+        const loader = new DefaultResourceLoader({ cwd: project.dir, agentDir: project.home,
+          settingsManager: SettingsManager.inMemory({ packages: [] }), additionalExtensionPaths: [probe] });
+        await loader.reload();
+        const { errors, extensions } = loader.getExtensions();
+        if (expectedError) {
+          assert.equal(errors.length, 1);
+          assert.match(errors[0]!.error, expectedError);
+        } else {
+          assert.deepEqual(errors, []);
+          assert.equal(extensions.length, 1);
+        }
+      } finally { project.dispose(); }
+    });
+  }
 });
 
 test("image conversions retain only hook coverage rather than mistaking generated captions for additions", async () => {
