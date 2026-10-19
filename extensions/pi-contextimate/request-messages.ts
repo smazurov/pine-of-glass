@@ -12,7 +12,7 @@ type RequestMessages = { additive: false } | { additive: true; chars: number };
 type TextPart = { role: "user" | "assistant"; text: string };
 type Normalization = Pick<typeof import("@earendil-works/pi-ai/api/transform-messages"), "transformMessages">
   & Pick<typeof import("@earendil-works/pi-ai/utils/sanitize-unicode"), "sanitizeSurrogates">;
-let normalization: Promise<Normalization> | undefined;
+let normalization: Promise<Normalization | undefined> | undefined;
 
 function conversationText(messages: Message[], model?: Model<Api>): TextPart[] {
   const anthropic = model?.api === "anthropic-messages";
@@ -64,6 +64,8 @@ export async function payloadTextAdditions(saved: AgentMessage[], payload: unkno
       }
     }
   }
+  // Bundled Pi may expose only virtual modules, without resolvable file paths.
+  // Fall back to context-hook accounting when native normalization is unavailable.
   normalization ??= (async () => {
     const dist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-ai")));
     // SAFETY: public Pi AI exports, exercised by native-converter regression tests.
@@ -72,8 +74,9 @@ export async function payloadTextAdditions(saved: AgentMessage[], payload: unkno
     // SAFETY: paired public Pi AI sanitizer, pinned by the same native-converter tests.
     const unicode = await import(pathToFileURL(join(dist, "utils/sanitize-unicode.js")).href) as typeof import("@earendil-works/pi-ai/utils/sanitize-unicode");
     return { transformMessages: messages.transformMessages, sanitizeSurrogates: unicode.sanitizeSurrogates };
-  })();
+  })().catch(() => undefined);
   const native = await normalization;
+  if (!native) return undefined;
   const expected = conversationText(native.transformMessages(messages, model), model)
     .map((part) => ({ ...part, text: native.sanitizeSurrogates(part.text) }));
   let index = 0;
